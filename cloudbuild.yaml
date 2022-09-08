@@ -5,14 +5,7 @@ steps:
 
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', 'gcr.io/$PROJECT_ID/demoapphouseprice:v1']
-- name: 'gcr.io/cloud-builders/gcloud'
-  entrypoint: "bash"
-  args:
-  - "-c"
-  - |
-    echo "Docker Container Built"
-    ls -la
-    ls -al models/
+
 - name: "gcr.io/cloud-builders/gke-deploy"
   args:
   - run
