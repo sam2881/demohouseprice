@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: demoprice
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: demoapphouseprice
@@ -16,4 +16,4 @@ spec:
       - name: cv-app
         image: gcr.io/demo/demoapphouseprice:v1
         ports:
-        - containerPort: 8501
+        - containerPort: 5000
