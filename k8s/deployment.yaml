@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demoprice
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demoapphouseprice
+  template:
+    metadata:
+      labels:
+        app: demoapphouseprice
+    spec:
+      containers:
+      - name: cv-app
+        image: gcr.io/demo/demoapphouseprice:v1
+        ports:
+        - containerPort: 8501
