@@ -1,40 +1,35 @@
+import json
+import re
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, explode_outer
+from pyspark.sql.types import *
+
+def camel_to_snake(name):
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+def read_json_schema(file_path):
+    with open(file_path, 'r') as file:
+        return json.load(file)
+
+def resolve_references(json_schema, definitions):
+    if '$ref' in json_schema:
+        ref_path = json_schema['$ref'].split('/')[-1]
+        resolved_schema = definitions.get(ref_path, {})
+        return resolve_references(resolved_schema, definitions)
+    return json_schema
+
 def json_to_spark_schema(json_schema, definitions):
-    """ Convert JSON schema to PySpark schema with detailed error handling. """
-    if isinstance(json_schema, list):  # Handle list of types or schemas (common in anyOf, allOf, oneOf)
-        # This simplistic approach assumes all elements in the list define the same type
-        # and picks the first compatible type for conversion.
-        for item in json_schema:
-            try:
-                return json_to_spark_schema(item, definitions)
-            except ValueError:
-                continue
-        raise ValueError("None of the schemas in the list could be converted: " + json.dumps(json_schema))
-
     if 'type' not in json_schema:
-        if '$ref' in json_schema:
-            return json_to_spark_schema(resolve_references(json_schema, definitions), definitions)
-        raise ValueError("No 'type' key found in schema: " + json.dumps(json_schema))
-
+        return None
     data_type = json_schema['type']
     if data_type == 'object':
-        if 'properties' in json_schema:
-            fields = [
-                StructField(
-                    name,
-                    json_to_spark_schema(prop, definitions),
-                    nullable=prop.get('nullable', True)
-                )
-                for name, prop in json_schema['properties'].items()
-            ]
-            return StructType(fields)
-        else:
-            raise ValueError("Object type must have 'properties': " + json.dumps(json_schema))
+        fields = [StructField(field_name, json_to_spark_schema(field_schema, definitions), True)
+                  for field_name, field_schema in json_schema.get('properties', {}).items()]
+        return StructType(fields)
     elif data_type == 'array':
-        if 'items' in json_schema:
-            element_schema = resolve_references(json_schema['items'], definitions)
-            return ArrayType(json_to_spark_schema(element_schema, definitions), True)
-        else:
-            raise ValueError("Array type must have 'items': " + json.dumps(json_schema))
+        element_schema = resolve_references(json_schema['items'], definitions)
+        return ArrayType(json_to_spark_schema(element_schema, definitions), True)
     elif data_type == 'string':
         return StringType()
     elif data_type == 'integer':
@@ -44,24 +39,57 @@ def json_to_spark_schema(json_schema, definitions):
     elif data_type == 'number':
         return DoubleType()
     else:
-        raise ValueError("Unsupported JSON data type: " + data_type)
+        return StringType()
 
-# Add better error handling and processing for complex structures
-def resolve_references(json_schema, definitions):
-    """ Resolve $ref to actual defined schema recursively. """
-    if isinstance(json_schema, dict) and '$ref' in json_schema:
-        ref_path = json_schema['$ref'].split('/')[-1]  # Assuming ref format is "#/definitions/RefName"
-        if ref_path in definitions:
-            return resolve_references(definitions[ref_path], definitions)
-        else:
-            raise ValueError(f"Reference '{json_schema['$ref']}' not found in definitions.")
-    return json_schema
+def extract_paths(schema, base_path=""):
+    paths = []
+    for field in schema.fields:
+        current_path = f"{base_path}.{field.name}" if base_path else field.name
+        if isinstance(field.dataType, ArrayType):
+            paths.append(current_path)
+            if isinstance(field.dataType.elementType, StructType):
+                paths += extract_paths(field.dataType.elementType, current_path)
+        elif isinstance(field.dataType, StructType):
+            paths += extract_paths(field.dataType, current_path)
+    return paths
 
-# Use the updated function in your schema loading and processing logic
-try:
-    schema_json = read_json_schema('path_to_schema.json')
-    definitions = schema_json.get('definitions', {})
-    spark_schema = json_to_spark_schema(schema_json, definitions)
-    print("Schema successfully parsed.")
-except ValueError as e:
-    print("Error parsing schema:", e)
+def apply_explode(df, paths):
+    for path in paths:
+        exploded_col_name = path.replace('.', '_') + "_exploded"
+        df = df.withColumn(exploded_col_name, explode_outer(col(path)))
+        df = df.drop(path).withColumnRenamed(exploded_col_name, path)
+    return df
+
+def generate_select_expr(columns):
+    select_expr = []
+    for col_name in columns:
+        snake_case_name = camel_to_snake(col_name.split('.')[-1])
+        select_expr.append(col(col_name).alias(snake_case_name))
+    return select_expr
+
+# Load schema and parse it
+schema_json = read_json_schema('path_to_schema.json')
+definitions = schema_json.get('definitions', {})
+spark_schema = json_to_spark_schema(schema_json, definitions)
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
+
+# Load data
+df = spark.read.schema(spark_schema).json("path_to_data.json")
+
+# Determine explosion paths
+explosion_paths = extract_paths(spark_schema)
+
+# Apply explosions
+df = apply_explode(df, explosion_paths)
+
+# Select and alias columns
+select_expressions = generate_select_expr(explosion_paths)
+df_final = df.select(*select_expressions)
+
+# Show result
+df_final.show(truncate=False)
+
+# Stop Spark session
+spark.stop()
