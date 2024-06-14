@@ -1,53 +1,31 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, explode_outer
-from pyspark.sql.types import StructType, StructField, ArrayType, StringType, IntegerType, BooleanType
-
-def camel_to_snake(name):
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
-
 def extract_paths(schema, base_path=""):
-    """Recursively find all paths that need exploding and/or are terminal paths to include in selects."""
+    """Recursively find all paths leading to arrays to be exploded."""
     paths = []
     for field in schema.fields:
         current_path = f"{base_path}.{field.name}" if base_path else field.name
         if isinstance(field.dataType, ArrayType):
-            # This path leads to an array, needs exploding
+            # This path leads to an array, which needs exploding
             paths.append(current_path)
+            # Recursively handle nested structure within the array
             if isinstance(field.dataType.elementType, StructType):
-                # Recursively handle nested structure within array
                 paths += extract_paths(field.dataType.elementType, current_path)
         elif isinstance(field.dataType, StructType):
-            # Recursively handle nested structures
+            # Continue to explore deeper for arrays
             paths += extract_paths(field.dataType, current_path)
-        else:
-            # Simple path, terminal node
-            if base_path:  # Include only if part of a larger path, to be used in select
-                paths.append(current_path)
     return paths
 
 def apply_explode(df, paths):
-    """Apply explode to all paths meant for arrays, handling nested as required."""
-    exploded_info = []
+    """Apply explode to all paths meant for arrays."""
     for path in paths:
-        if '.' in path:
-            exploded_col_name = camel_to_snake(path.split('.')[-1] + "_exploded")
-            df = df.withColumn(exploded_col_name, explode_outer(col(path)))
-            exploded_info.append((exploded_col_name, path))
-    return df, exploded_info
+        exploded_col_name = camel_to_snake(path.split('.')[-1] + "_exploded")
+        df = df.withColumn(exploded_col_name, explode_outer(col(path)))
+    return df
 
-def generate_select_expr(columns):
-    """Generate select expressions for exploded and terminal fields."""
-    select_expr = []
-    for col_name, original_path in columns:
-        snake_case_name = camel_to_snake(col_name)
-        select_expr.append(col(col_name).alias(snake_case_name))
-    return select_expr
-
-# Example Usage
+# Test with schema example
 schema = StructType([
     StructField("metadata", StructType([
-        StructField("subEvents", ArrayType(StringType(), True), True)
+        StructField("subEvents", ArrayType(StringType(), True), True),
+        StructField("originatedSource", StringType(), True)
     ]), True),
     StructField("individualCoreIdentity", StructType([
         StructField("individualDemographic", ArrayType(StructType([
@@ -56,18 +34,8 @@ schema = StructType([
                 StructField("value", StringType(), True),
             ]), True), True),
         ]), True), True),
-        StructField("individualEmployer", ArrayType(StringType(), True), True),
     ]), True)
 ])
 
-# Initialize Spark session
-spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
-
-# Assuming df is loaded and schema applied
-explosion_paths = extract_paths(schema)
-df, exploded_info = apply_explode(df, explosion_paths)
-select_expressions = generate_select_expr(exploded_info)
-df_final = df.select(select_expressions)
-
-df_final.show(truncate=False)
-spark.stop()
+paths = extract_paths(schema)
+print(paths)  # This should only include paths that lead to Arrays
