@@ -55,9 +55,8 @@ def extract_paths(schema, base_path=""):
 
 def apply_explode(df, paths):
     for path in paths:
-        exploded_col_name = path.replace('.', '_') + "_exploded"
+        exploded_col_name = path.split('.')[-1] + "_exploded"
         df = df.withColumn(exploded_col_name, explode_outer(col(path)))
-        df = df.drop(path).withColumnRenamed(exploded_col_name, path)
     return df
 
 def generate_select_expr(columns):
