@@ -6,15 +6,18 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, explode_outer
 from pyspark.sql.types import *
 
+
 def read_json_file(file_path):
     """Read and return the JSON schema from a file."""
     with open(file_path, 'r') as file:
         return json.load(file)
 
+
 def camel_to_snake(name):
     """Convert camelCase string to snake_case string."""
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
 
 def resolve_reference(ref, definitions):
     """Resolve $ref to actual defined schema, handling nested references."""
@@ -22,6 +25,7 @@ def resolve_reference(ref, definitions):
         ref_key = ref['$ref'].replace('#/definitions/', '')  # Adjust based on your schema's definition path
         return resolve_reference(definitions.get(ref_key, {}), definitions)
     return ref
+
 
 def convert_to_spark_schema(json_schema, definitions):
     """Convert JSON schema to PySpark schema, handling types and references."""
@@ -53,11 +57,13 @@ def convert_to_spark_schema(json_schema, definitions):
         return convert_to_spark_schema(json_schema[0], definitions) if json_schema else None
     return None
 
+
 def generate_pyspark_schema(schema_dict):
     """Generate a PySpark schema from a JSON schema dictionary."""
     definitions = schema_dict.get('definitions', {})
     main_schema = schema_dict if 'type' in schema_dict else schema_dict.get('properties', {})
     return convert_to_spark_schema(main_schema, definitions)
+
 
 def generate_schema_file(schema, schema_file_path):
     """Generate a Python file that contains the schema definition."""
@@ -68,6 +74,7 @@ def generate_schema_file(schema, schema_file_path):
 
     with open(schema_file_path, 'w') as file:
         file.write(schema_code)
+
 
 def extract_column_paths(schema, parent_path=""):
     """
@@ -95,6 +102,7 @@ def extract_column_paths(schema, parent_path=""):
             column_paths.append(current_path)
     return column_paths
 
+
 def determine_explode_paths(schema, parent_path=""):
     """
     Recursively determine which column paths need exploding for nested arrays.
@@ -114,6 +122,7 @@ def determine_explode_paths(schema, parent_path=""):
             nested_explodes = determine_explode_paths(field.dataType, current_path)
             explode_paths.extend(nested_explodes)
     return explode_paths
+
 
 def generate_select_expression_from_list(column_names):
     """Generate a DataFrame select expression with properly aliased columns from a list of column names."""
@@ -145,16 +154,14 @@ def generate_select_expression_from_list(column_names):
 
     return select_expr
 
+
 def apply_transformations(df, explode_paths):
     """Apply transformations including recursive explode_outer for nested arrays."""
-    while explode_paths:
-        new_explode_paths = []
-        for path in explode_paths:
-            exploded_column = path.split('.')[-1] + "_exploded"
-            df = df.withColumn(exploded_column, explode_outer(col(path)))
-            new_explode_paths.append(exploded_column)
-        explode_paths = new_explode_paths
+    for path in explode_paths:
+        exploded_column = path.split('.')[-1] + "_exploded"
+        df = df.withColumn(exploded_column, explode_outer(col(path)))
     return df
+
 
 def generate_pyspark_script(config, schema):
     """Generate a PySpark script to load and process JSON data."""
@@ -216,6 +223,7 @@ spark.stop()
     with open(output_file_path, 'w') as file:
         file.write(pyspark_code)
 
+
 def main():
     config_path = 'config.yaml'
     with open(config_path, 'r') as file:
@@ -225,6 +233,7 @@ def main():
     definitions = json_schema.get('definitions', {})
     pyspark_schema = convert_to_spark_schema(json_schema, definitions)
     generate_pyspark_script(config, pyspark_schema)
+
 
 if __name__ == "__main__":
     main()
