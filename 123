@@ -1,15 +1,15 @@
-def resolve_references(json_schema, definitions):
-    """ Resolve $ref to actual defined schema recursively. """
-    if isinstance(json_schema, dict) and '$ref' in json_schema:
-        ref_path = json_schema['$ref'].split('/')[-1]  # Assuming ref format is "#/definitions/RefName"
-        if ref_path in definitions:
-            return resolve_references(definitions[ref_path], definitions)
-        else:
-            raise ValueError(f"Reference '{json_schema['$ref']}' not found in definitions.")
-    return json_schema
-
 def json_to_spark_schema(json_schema, definitions):
     """ Convert JSON schema to PySpark schema with detailed error handling. """
+    if isinstance(json_schema, list):  # Handle list of types or schemas (common in anyOf, allOf, oneOf)
+        # This simplistic approach assumes all elements in the list define the same type
+        # and picks the first compatible type for conversion.
+        for item in json_schema:
+            try:
+                return json_to_spark_schema(item, definitions)
+            except ValueError:
+                continue
+        raise ValueError("None of the schemas in the list could be converted: " + json.dumps(json_schema))
+
     if 'type' not in json_schema:
         if '$ref' in json_schema:
             return json_to_spark_schema(resolve_references(json_schema, definitions), definitions)
@@ -46,7 +46,18 @@ def json_to_spark_schema(json_schema, definitions):
     else:
         raise ValueError("Unsupported JSON data type: " + data_type)
 
-# Load and parse schema
+# Add better error handling and processing for complex structures
+def resolve_references(json_schema, definitions):
+    """ Resolve $ref to actual defined schema recursively. """
+    if isinstance(json_schema, dict) and '$ref' in json_schema:
+        ref_path = json_schema['$ref'].split('/')[-1]  # Assuming ref format is "#/definitions/RefName"
+        if ref_path in definitions:
+            return resolve_references(definitions[ref_path], definitions)
+        else:
+            raise ValueError(f"Reference '{json_schema['$ref']}' not found in definitions.")
+    return json_schema
+
+# Use the updated function in your schema loading and processing logic
 try:
     schema_json = read_json_schema('path_to_schema.json')
     definitions = schema_json.get('definitions', {})
