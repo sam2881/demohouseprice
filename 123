@@ -1,13 +1,15 @@
 def apply_explode(df, paths):
     exploded_dfs = []
     for path in paths:
-        parts = path.split('.')
-        for i in range(len(parts)):
-            sub_path = '.'.join(parts[:i + 1])
-            exploded_col_name = camel_to_snake(parts[i] + "_exploded")
-            if "exploded" not in sub_path:
-                df = df.withColumn(exploded_col_name, explode_outer(col(sub_path)))
-        exploded_dfs.append((exploded_col_name, sub_path))
+        last_part = path.split('.')[-1]
+        # Check if the last part of the path is an array by inspecting the schema
+        field = df.schema
+        for part in path.split('.'):
+            field = field[part]
+            if field.dataType.typeName() == 'array':
+                exploded_col_name = camel_to_snake(part + "_exploded")
+                df = df.withColumn(exploded_col_name, explode_outer(col(path)))
+                exploded_dfs.append((exploded_col_name, path))
     return df, exploded_dfs
 
 def generate_select_expr(exploded_dfs):
@@ -16,7 +18,21 @@ def generate_select_expr(exploded_dfs):
         select_expr.append(col(exploded_col_name).alias(camel_to_snake(path.replace('.', '_'))))
     return select_expr
 
-# After exploding
+# Load schema and parse it
+schema_json = read_json_schema('path_to_schema.json')
+definitions = schema_json.get('definitions', {})
+spark_schema = json_to_spark_schema(schema_json, definitions)
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
+
+# Load data
+df = spark.read.schema(spark_schema).json("path_to_data.json")
+
+# Determine explosion paths
+explosion_paths = extract_paths(spark_schema)
+
+# Apply explosions
 df, exploded_info = apply_explode(df, explosion_paths)
 
 # Generate select expressions based on exploded columns
@@ -24,3 +40,6 @@ select_expressions = generate_select_expr(exploded_info)
 df_final = df.select(*select_expressions)
 
 df_final.show(truncate=False)
+
+# Stop Spark session
+spark.stop()
