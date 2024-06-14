@@ -1,24 +1,73 @@
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, explode_outer
+from pyspark.sql.types import StructType, StructField, ArrayType, StringType, IntegerType, BooleanType
+
+def camel_to_snake(name):
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+def extract_paths(schema, base_path=""):
+    """Recursively find all paths that need exploding and/or are terminal paths to include in selects."""
+    paths = []
+    for field in schema.fields:
+        current_path = f"{base_path}.{field.name}" if base_path else field.name
+        if isinstance(field.dataType, ArrayType):
+            # This path leads to an array, needs exploding
+            paths.append(current_path)
+            if isinstance(field.dataType.elementType, StructType):
+                # Recursively handle nested structure within array
+                paths += extract_paths(field.dataType.elementType, current_path)
+        elif isinstance(field.dataType, StructType):
+            # Recursively handle nested structures
+            paths += extract_paths(field.dataType, current_path)
+        else:
+            # Simple path, terminal node
+            if base_path:  # Include only if part of a larger path, to be used in select
+                paths.append(current_path)
+    return paths
 
 def apply_explode(df, paths):
-    exploded_dfs = []
+    """Apply explode to all paths meant for arrays, handling nested as required."""
+    exploded_info = []
     for path in paths:
-        # Split the path and find the field in the schema
-        parts = path.split('.')
-        field = df.schema
-        try:
-            for part in parts:
-                # find field in StructType
-                field = field[part] if isinstance(field, StructType) else field.dataType[part]
-        except TypeError:
-            # Skip if the path does not lead to an ArrayType
-            continue
-        
-        # Check if the field's dataType is an ArrayType and explode it
-        if isinstance(field.dataType, ArrayType):
-            exploded_col_name = camel_to_snake(parts[-1] + "_exploded")
+        if '.' in path:
+            exploded_col_name = camel_to_snake(path.split('.')[-1] + "_exploded")
             df = df.withColumn(exploded_col_name, explode_outer(col(path)))
-            exploded_dfs.append((exploded_col_name, path))
-    return df, exploded_dfs
+            exploded_info.append((exploded_col_name, path))
+    return df, exploded_info
 
-# The rest of your code remains the same
+def generate_select_expr(columns):
+    """Generate select expressions for exploded and terminal fields."""
+    select_expr = []
+    for col_name, original_path in columns:
+        snake_case_name = camel_to_snake(col_name)
+        select_expr.append(col(col_name).alias(snake_case_name))
+    return select_expr
+
+# Example Usage
+schema = StructType([
+    StructField("metadata", StructType([
+        StructField("subEvents", ArrayType(StringType(), True), True)
+    ]), True),
+    StructField("individualCoreIdentity", StructType([
+        StructField("individualDemographic", ArrayType(StructType([
+            StructField("demographicsValue", ArrayType(StructType([
+                StructField("type", StringType(), True),
+                StructField("value", StringType(), True),
+            ]), True), True),
+        ]), True), True),
+        StructField("individualEmployer", ArrayType(StringType(), True), True),
+    ]), True)
+])
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
+
+# Assuming df is loaded and schema applied
+explosion_paths = extract_paths(schema)
+df, exploded_info = apply_explode(df, explosion_paths)
+select_expressions = generate_select_expr(exploded_info)
+df_final = df.select(select_expressions)
+
+df_final.show(truncate=False)
+spark.stop()
