@@ -1,41 +1,26 @@
-def extract_paths(schema, base_path=""):
-    """Recursively find all paths leading to arrays to be exploded."""
-    paths = []
+def apply_explode(df, schema, base_path=""):
     for field in schema.fields:
         current_path = f"{base_path}.{field.name}" if base_path else field.name
         if isinstance(field.dataType, ArrayType):
-            # This path leads to an array, which needs exploding
-            paths.append(current_path)
-            # Recursively handle nested structure within the array
-            if isinstance(field.dataType.elementType, StructType):
-                paths += extract_paths(field.dataType.elementType, current_path)
+            # Explode only if the array's elementType is a StructType or another ArrayType
+            if isinstance(field.dataType.elementType, (StructType, ArrayType)):
+                exploded_col_name = camel_to_snake(current_path.split('.')[-1]) + "_exploded"
+                df = df.withColumn(exploded_col_name, explode_outer(col(current_path)))
+                # Recursively apply explosion to the elements of this array if it is a StructType
+                if isinstance(field.dataType.elementType, StructType):
+                    df = apply_explode(df, field.dataType.elementType, exploded_col_name)
         elif isinstance(field.dataType, StructType):
-            # Continue to explore deeper for arrays
-            paths += extract_paths(field.dataType, current_path)
-    return paths
-
-def apply_explode(df, paths):
-    """Apply explode to all paths meant for arrays."""
-    for path in paths:
-        exploded_col_name = camel_to_snake(path.split('.')[-1] + "_exploded")
-        df = df.withColumn(exploded_col_name, explode_outer(col(path)))
+            df = apply_explode(df, field.dataType, current_path)
     return df
-
-# Test with schema example
-schema = StructType([
-    StructField("metadata", StructType([
-        StructField("subEvents", ArrayType(StringType(), True), True),
-        StructField("originatedSource", StringType(), True)
-    ]), True),
-    StructField("individualCoreIdentity", StructType([
-        StructField("individualDemographic", ArrayType(StructType([
-            StructField("demographicsValue", ArrayType(StructType([
-                StructField("type", StringType(), True),
-                StructField("value", StringType(), True),
-            ]), True), True),
-        ]), True), True),
-    ]), True)
-])
-
-paths = extract_paths(schema)
-print(paths)  # This should only include paths that lead to Arrays
+def generate_select_expr(schema, base_path=""):
+    select_expr = []
+    for field in schema.fields:
+        current_path = f"{base_path}.{field.name}" if base_path else field.name
+        if isinstance(field.dataType, StructType) or isinstance(field.dataType, ArrayType):
+            # Recursively handle nested structs or arrays
+            select_expr.extend(generate_select_expr(field.dataType, current_path))
+        else:
+            # Only add leaf nodes to select expressions
+            snake_case_name = camel_to_snake(current_path.split('.')[-1])
+            select_expr.append(col(current_path).alias(snake_case_name))
+    return select_expr
