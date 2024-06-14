@@ -218,4 +218,13 @@ spark.stop()
 
 def main():
     config_path = 'config.yaml'
-    with open(config_path, 'r
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+
+    json_schema = read_json_file(config['json_schema_path'])
+    definitions = json_schema.get('definitions', {})
+    pyspark_schema = convert_to_spark_schema(json_schema, definitions)
+    generate_pyspark_script(config, pyspark_schema)
+
+if __name__ == "__main__":
+    main()
