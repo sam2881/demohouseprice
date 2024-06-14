@@ -1,26 +1,120 @@
-def apply_explode(df, schema, base_path=""):
-    for field in schema.fields:
-        current_path = f"{base_path}.{field.name}" if base_path else field.name
-        if isinstance(field.dataType, ArrayType):
-            # Explode only if the array's elementType is a StructType or another ArrayType
-            if isinstance(field.dataType.elementType, (StructType, ArrayType)):
-                exploded_col_name = camel_to_snake(current_path.split('.')[-1]) + "_exploded"
-                df = df.withColumn(exploded_col_name, explode_outer(col(current_path)))
-                # Recursively apply explosion to the elements of this array if it is a StructType
+import json
+import re
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, explode_outer
+from pyspark.sql.types import *
+
+def camel_to_snake(name):
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+def read_json_schema(file_path):
+    with open(file_path, 'r') as file:
+        return json.load(file)
+
+def resolve_references(json_schema, definitions):
+    if '$ref' in json_schema:
+        ref_path = json_schema['$ref'].split('/')[-1]
+        resolved_schema = definitions.get(ref_path, {})
+        return resolve_references(resolved_schema, definitions)
+    return json_schema
+
+def json_to_spark_schema(json_schema, definitions):
+    if 'type' not in json_schema:
+        return None
+    data_type = json_schema['type']
+    if data_type == 'object':
+        fields = [StructField(field_name, json_to_spark_schema(field_schema, definitions), True)
+                  for field_name, field_schema in json_schema.get('properties', {}).items()]
+        return StructType(fields)
+    elif data_type == 'array':
+        element_schema = resolve_references(json_schema['items'], definitions)
+        return ArrayType(json_to_spark_schema(element_schema, definitions), True)
+    elif data_type == 'string':
+        return StringType()
+    elif data_type == 'integer':
+        return IntegerType()
+    elif data_type == 'boolean':
+        return BooleanType()
+    elif data_type == 'number':
+        return DoubleType()
+    else:
+        return StringType()
+
+def extract_paths(schema, base_path=""):
+    paths = []
+    if isinstance(schema, StructType):
+        for field in schema.fields:
+            current_path = f"{base_path}.{field.name}" if base_path else field.name
+            if isinstance(field.dataType, ArrayType):
+                paths.append(current_path)
                 if isinstance(field.dataType.elementType, StructType):
-                    df = apply_explode(df, field.dataType.elementType, exploded_col_name)
-        elif isinstance(field.dataType, StructType):
-            df = apply_explode(df, field.dataType, current_path)
-    return df
-def generate_select_expr(schema, base_path=""):
+                    paths += extract_paths(field.dataType.elementType, current_path)
+            elif isinstance(field.dataType, StructType):
+                paths += extract_paths(field.dataType, current_path)
+    return paths
+
+def get_field(schema, part):
+    if isinstance(schema, StructType):
+        for field in schema.fields:
+            if field.name == part:
+                return field
+    elif isinstance(schema, ArrayType) and isinstance(schema.elementType, StructType):
+        for field in schema.elementType.fields:
+            if field.name == part:
+                return field
+    return None
+
+def apply_explode(df, paths):
+    exploded_info = []
+    for path in paths:
+        field = df.schema
+        parts = path.split(".")
+        for part in parts:
+            field = get_field(field, part)
+            if isinstance(field.dataType, ArrayType):
+                break
+        if isinstance(field.dataType, ArrayType):
+            exploded_col_name = part + "_exploded"
+            df = df.withColumn(exploded_col_name, explode_outer(col(path)))
+            exploded_info.append((path, exploded_col_name))
+    return df, exploded_info
+
+def generate_select_expr(schema, base_path="", exploded_info=[]):
     select_expr = []
-    for field in schema.fields:
-        current_path = f"{base_path}.{field.name}" if base_path else field.name
-        if isinstance(field.dataType, StructType) or isinstance(field.dataType, ArrayType):
-            # Recursively handle nested structs or arrays
-            select_expr.extend(generate_select_expr(field.dataType, current_path))
-        else:
-            # Only add leaf nodes to select expressions
-            snake_case_name = camel_to_snake(current_path.split('.')[-1])
-            select_expr.append(col(current_path).alias(snake_case_name))
+    if isinstance(schema, StructType):
+        for field in schema.fields:
+            current_path = f"{base_path}.{field.name}" if base_path else field.name
+            exploded_path = next((ei[1] for ei in exploded_info if ei[0] == current_path), None)
+            if exploded_path:
+                current_path = exploded_path
+            if isinstance(field.dataType, (StructType, ArrayType)):
+                select_expr.extend(generate_select_expr(field.dataType, current_path, exploded_info))
+            else:
+                snake_case_name = camel_to_snake(current_path.split('.')[-1])
+                select_expr.append(col(current_path).alias(snake_case_name))
     return select_expr
+
+def main():
+    schema_json = read_json_schema('path_to_schema.json')
+    definitions = schema_json.get('definitions', {})
+    spark_schema = json_to_spark_schema(schema_json, definitions)
+
+    spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
+
+    df = spark.read.schema(spark_schema).json("path_to_data.json")
+
+    explosion_paths = extract_paths(spark_schema)
+    print("Explosion Paths:", explosion_paths)
+    df, exploded_info = apply_explode(df, explosion_paths)
+    print("Exploded Info:", exploded_info)
+
+    select_expressions = generate_select_expr(spark_schema, "", exploded_info)
+    df_final = df.select(*select_expressions)
+
+    df_final.show(truncate=False)
+
+    spark.stop()
+
+if __name__ == "__main__":
+    main()
