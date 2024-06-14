@@ -97,7 +97,7 @@ def extract_column_paths(schema, parent_path=""):
 
 def determine_explode_paths(column_paths):
     """Determine which column paths need exploding."""
-    return [path for path in column_paths if 'array' in path.lower()]
+    return [path for path in column_paths if "array" in path.lower()]
 
 def generate_select_expression_from_list(column_names):
     """Generate a DataFrame select expression with properly aliased columns from a list of column names."""
