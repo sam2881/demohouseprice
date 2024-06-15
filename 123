@@ -28,23 +28,25 @@ def apply_nested_explode_and_select(df, paths):
             
             if isinstance(field.dataType, StructType):
                 current_schema = field.dataType
-            elif isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
                 current_path = current_path + "." + part if current_path else part
+            elif isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
+                if current_path:
+                    complete_path = current_path + "." + part
+                else:
+                    complete_path = part
                 exploded_column_name = camel_to_snake(part + '_exploded')
-                if current_path not in exploded_info:
-                    df = df.withColumn(exploded_column_name, explode_outer(col(current_path)))
-                    exploded_info.append(current_path)
-                    current_schema = field.dataType.elementType
-                    current_path = exploded_column_name
+                if complete_path not in exploded_info:
+                    df = df.withColumn(exploded_column_name, explode_outer(col(complete_path)))
+                    exploded_info.append(complete_path)
+                current_schema = field.dataType.elementType
+                current_path = exploded_column_name
 
-        # Add select expressions for the last part if it's an array of structs
+        # Generating select expressions for all fields in the final exploded column
         if isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
-            last_part = sub_parts[-1]
-            exploded_column_name = camel_to_snake(last_part + '_exploded')
-            select_expressions.extend([
-                f"col('{exploded_column_name}.value').alias('{camel_to_snake(last_part + '_value')}')",
-                f"col('{exploded_column_name}.status').alias('{camel_to_snake(last_part + '_status')}')"
-            ])
+            for struct_field in field.dataType.elementType.fields:
+                select_expressions.append(
+                    f"col('{current_path}.{struct_field.name}').alias('{camel_to_snake(struct_field.name)}')"
+                )
 
     # Generate the select statement
     select_expr_string = ",\n    ".join(select_expressions)
@@ -56,6 +58,7 @@ spark = SparkSession.builder.appName("Nested Explode and Select Example").getOrC
 
 # Assuming df is your DataFrame and you have paths like below
 paths = [
+    "individualCoreIdentity.individualDemographic",
     "individualCoreIdentity.productEntitlement.individualPreference",
     "individualCoreIdentity.productEntitlement.individualPreference.preferenceValue"
 ]
