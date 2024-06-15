@@ -1,33 +1,42 @@
+from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, explode_outer
+from pyspark.sql.types import StructType, ArrayType, StructField
 
-def explode_and_track(df, paths):
-    exploded_info = []
-    for path in paths:
-        exploded_column = f"{path.split('.')[-1]}_exploded"
-        df = df.withColumn(exploded_column, explode_outer(col(path)))
-        exploded_info.append((path, exploded_column))
-    return df, exploded_info
+def flatten_df(df, prefix=''):
+    """
+    Recursively flattens a DataFrame and handles arrays by exploding them.
 
-def expand_structs(df, paths):
-    select_expressions = []
-    for path, alias in paths:
-        subfields = df.schema[path].dataType.elementType if isinstance(df.schema[path].dataType, ArrayType) else df.schema[path].dataType
-        if isinstance(subfields, StructType):
-            for field in subfields.fields:
-                full_path = f"{alias}.{field.name}"
-                new_alias = full_path.replace('.', '_')
-                df = df.withColumn(new_alias, col(full_path))
-                select_expressions.append(f"col('{new_alias}').alias('{new_alias}')")
-    return df, select_expressions
+    :param df: Input DataFrame
+    :param prefix: Cumulative path to prepend to column names for maintaining hierarchy
+    :return: DataFrame with flattened schema
+    """
+    # Base case: no more StructType or ArrayType to flatten
+    complex_fields = [f for f in df.schema.fields if isinstance(f.dataType, (StructType, ArrayType))]
+    if not complex_fields:
+        return df
 
-def generate_select_statement(select_expressions):
-    return f"df.select(\n    {',\n    '.join(select_expressions)}\n).show(truncate=False)"
+    new_columns = []
+    for field in df.schema.fields:
+        new_col_name = prefix + field.name if prefix else field.name
 
-# Usage:
-df, exploded_info = explode_and_track(df, ["path_to_outer_array"])
-df, select_expressions = expand_structs(df, exploded_info)
-select_statement = generate_select_statement(select_expressions)
-print(select_statement)
+        if isinstance(field.dataType, StructType):
+            # Recursively flatten structs
+            flattened_df = flatten_df(df.select(f"{new_col_name}.*"), new_col_name + '_')
+            new_columns.extend([col(f.name).alias(new_col_name + '_' + f.name) for f in flattened_df.schema.fields])
+        elif isinstance(field.dataType, ArrayType):
+            # Explode arrays and flatten the resulting DataFrame recursively
+            if isinstance(field.dataType.elementType, StructType):
+                df = df.withColumn(new_col_name, explode_outer(col(new_col_name)))
+                flattened_df = flatten_df(df.select(f"{new_col_name}.*"), new_col_name + '_')
+                new_columns.extend([col(f.name).alias(new_col_name + '_' + f.name) for f in flattened_df.schema.fields])
+            else:
+                new_columns.append(explode_outer(col(new_col_name)).alias(new_col_name))
+        else:
+            new_columns.append(col(new_col_name).alias(new_col_name))
 
-# Execute the select statement if needed:
-exec(select_statement)
+    return df.select(new_columns)
+
+# Usage
+flattened_df = flatten_df(df)
+flattened_df.printSchema()
+flattened_df.show(truncate=False)
