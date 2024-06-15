@@ -1,6 +1,3 @@
-from pyspark.sql.functions import col, explode_outer
-from pyspark.sql.types import StructType, ArrayType
-
 def flatten_json(df):
     """
     Flattens a DataFrame with complex nested fields (Arrays and Structs) by converting them into individual columns
@@ -14,31 +11,32 @@ def flatten_json(df):
     - Prints the select statement for further customization.
     """
     select_expressions = []  # List to hold select expressions for final DataFrame viewing
-    complex_fields = dict([(field.name, field.dataType) for field in df.schema.fields
-                           if isinstance(field.dataType, (ArrayType, StructType))])
+    process_queue = [(field.name, field.dataType) for field in df.schema.fields
+                     if isinstance(field.dataType, (ArrayType, StructType))]
 
-    while complex_fields:
-        col_name = list(complex_fields.keys())[0]
-        print("Processing: " + col_name + " Type: " + str(type(complex_fields[col_name])))
+    while process_queue:
+        col_name, data_type = process_queue.pop(0)
+        print("Processing: " + col_name + " Type: " + str(type(data_type)))
 
-        if isinstance(complex_fields[col_name], StructType):
-            expanded = [col(col_name + '.' + k).alias(col_name + '_' + k) for k in [n.name for n in complex_fields[col_name]]]
-            df = df.select("*", *expanded).drop(col_name)
-            select_expressions.extend([f"{col_name}_{n.name}" for n in complex_fields[col_name]])
+        if isinstance(data_type, StructType):
+            for field in data_type.fields:
+                new_col_name = f"{col_name}_{field.name}"
+                df = df.withColumn(new_col_name, col(f"{col_name}.{field.name}"))
+                select_expressions.append(new_col_name)
+                if isinstance(field.dataType, (ArrayType, StructType)):
+                    process_queue.append((new_col_name, field.dataType))
 
-        elif isinstance(complex_fields[col_name], ArrayType):
-            exploded_col_name = col_name + "_exploded"
+        elif isinstance(data_type, ArrayType):
+            exploded_col_name = f"{col_name}_exploded"
             df = df.withColumn(exploded_col_name, explode_outer(col(col_name)))
-            if isinstance(complex_fields[col_name].elementType, StructType):
-                for subfield in complex_fields[col_name].elementType.fields:
-                    new_col_name = exploded_col_name + '_' + subfield.name
-                    df = df.withColumn(new_col_name, col(exploded_col_name + '.' + subfield.name))
+            select_expressions.append(exploded_col_name)
+            if isinstance(data_type.elementType, StructType):
+                for subfield in data_type.elementType.fields:
+                    new_col_name = f"{exploded_col_name}_{subfield.name}"
+                    df = df.withColumn(new_col_name, col(f"{exploded_col_name}.{subfield.name}"))
                     select_expressions.append(new_col_name)
-            else:
-                select_expressions.append(exploded_col_name)
-
-        complex_fields = dict([(field.name, field.dataType) for field in df.schema.fields
-                               if isinstance(field.dataType, (ArrayType, StructType))])
+                    if isinstance(subfield.dataType, (ArrayType, StructType)):
+                        process_queue.append((new_col_name, subfield.dataType))
 
     # Build and print the select statement for manual editing if necessary
     select_clause = ",\n    ".join(f"col('{expr}').alias('{expr}')" for expr in select_expressions)
