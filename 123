@@ -1,53 +1,33 @@
 from pyspark.sql.functions import col, explode_outer
-from pyspark.sql.types import StructType, ArrayType
 
-def flatten_json(df):
-    """
-    Flattens a DataFrame with complex nested fields (Arrays and Structs) by converting them into individual columns
-    and builds a customizable select statement with full paths for columns and underscored aliases.
-    
-    Parameters:
-    - df: The input DataFrame with complex nested fields.
-    
-    Returns:
-    - The flattened DataFrame with all complex fields expanded into separate columns.
-    - Prints the select statement for further customization.
-    """
-    select_expressions = []  # List to hold select expressions for final DataFrame viewing
-    process_queue = [(field.name, field.dataType, field.name) for field in df.schema.fields]
+def explode_and_track(df, paths):
+    exploded_info = []
+    for path in paths:
+        exploded_column = f"{path.split('.')[-1]}_exploded"
+        df = df.withColumn(exploded_column, explode_outer(col(path)))
+        exploded_info.append((path, exploded_column))
+    return df, exploded_info
 
-    while process_queue:
-        col_name, data_type, full_path = process_queue.pop(0)
-        alias_name = full_path.replace('.', '_')
-        print("Processing: " + col_name + " Type: " + str(type(data_type)) + " Path: " + full_path)
+def expand_structs(df, paths):
+    select_expressions = []
+    for path, alias in paths:
+        subfields = df.schema[path].dataType.elementType if isinstance(df.schema[path].dataType, ArrayType) else df.schema[path].dataType
+        if isinstance(subfields, StructType):
+            for field in subfields.fields:
+                full_path = f"{alias}.{field.name}"
+                new_alias = full_path.replace('.', '_')
+                df = df.withColumn(new_alias, col(full_path))
+                select_expressions.append(f"col('{new_alias}').alias('{new_alias}')")
+    return df, select_expressions
 
-        if isinstance(data_type, StructType):
-            for field in data_type.fields:
-                new_col_name = f"{col_name}_{field.name}"
-                new_full_path = f"{full_path}.{field.name}"
-                df = df.withColumn(new_col_name, col(new_full_path))
-                select_expressions.append((new_full_path, new_col_name.replace('.', '_')))
-                if isinstance(field.dataType, (ArrayType, StructType)):
-                    process_queue.append((new_col_name, field.dataType, new_full_path))
+def generate_select_statement(select_expressions):
+    return f"df.select(\n    {',\n    '.join(select_expressions)}\n).show(truncate=False)"
 
-        elif isinstance(data_type, ArrayType):
-            exploded_col_name = f"{col_name}_exploded"
-            exploded_full_path = f"{full_path}"
-            df = df.withColumn(exploded_col_name, explode_outer(col(full_path)))
-            select_expressions.append((exploded_full_path, exploded_col_name))
-            if isinstance(data_type.elementType, StructType):
-                process_queue += [
-                    (f"{exploded_col_name}_{subfield.name}", subfield.dataType, f"{exploded_full_path}.{subfield.name}")
-                    for subfield in data_type.elementType.fields
-                ]
+# Usage:
+df, exploded_info = explode_and_track(df, ["path_to_outer_array"])
+df, select_expressions = expand_structs(df, exploded_info)
+select_statement = generate_select_statement(select_expressions)
+print(select_statement)
 
-    # Build and print the select statement for manual editing if necessary
-    select_clause = ",\n    ".join(f"col('{full_path}').alias('{alias_name}')" for full_path, alias_name in select_expressions)
-    select_statement = f"df.select(\n    {select_clause}\n).show(truncate=False)"
-    print(select_statement)
-
-    return df, select_statement  # Return the DataFrame and the select statement
-
-# Example of usage, assuming 'spark' is a SparkSession and 'df' is your DataFrame:
-df, select_statement = flatten_json(df)
-exec(select_statement)  # Execute the select statement to view the DataFrame
+# Execute the select statement if needed:
+exec(select_statement)
