@@ -1,52 +1,40 @@
-def flatten_json(df, prefix=""):
+from pyspark.sql.functions import col, explode_outer
+
+def flatten_df(df):
     """
-    Flattens a DataFrame with complex nested fields (Arrays and Structs) by converting them into individual columns
-    and allows for dynamic aliasing in the select statement.
+    Flattens a DataFrame with complex nested fields (Arrays and Structs) by creating individual columns
+    for each nested field. The function modifies the DataFrame schema directly to make it flat.
 
     Parameters:
-    - df: The input DataFrame with complex nested fields
-    - prefix: A string prefix to prepend to column aliases for uniqueness and traceability
+    - df: The input DataFrame with complex nested fields.
     
     Returns:
-    - A tuple of the flattened DataFrame and the select expression list.
+    - The flattened DataFrame.
     """
-    select_expressions = []  # To store final select expressions
-    complex_fields = [(field.name, field.dataType) for field in df.schema.fields
-                      if isinstance(field.dataType, (ArrayType, StructType))]
+    # Loop over fields in the original DataFrame schema
+    for field in df.schema.fields:
+        # Flatten StructType
+        if isinstance(field.dataType, StructType):
+            for subfield in field.dataType.fields:
+                # Full path to the subfield
+                path = f"{field.name}.{subfield.name}"
+                # Create a new column for each subfield
+                df = df.withColumn(path.replace('.', '_'), col(path))
+            # Drop the original struct column after extracting all subfields
+            df = df.drop(field.name)
 
-    processed_columns = set()  # To track processed columns and avoid duplicates
+        # Flatten ArrayType containing StructType
+        elif isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
+            # Explode the arrays first to deal with struct fields inside them
+            df = df.withColumn(field.name, explode_outer(col(field.name)))
+            for subfield in field.dataType.elementType.fields:
+                path = f"{field.name}.{subfield.name}"
+                df = df.withColumn(path.replace('.', '_'), col(path))
+            # Optionally, drop the original array column after expanding or keep it if needed
 
-    while complex_fields:
-        new_complex_fields = []
-        for col_name, data_type in complex_fields:
-            full_col_name = f"{prefix}.{col_name}" if prefix else col_name
-            full_col_name = full_col_name.strip('.')
+    return df
 
-            if isinstance(data_type, StructType):
-                for field in data_type.fields:
-                    new_col_name = f"{full_col_name}.{field.name}"
-                    if isinstance(field.dataType, (ArrayType, StructType)):
-                        new_complex_fields.append((new_col_name, field.dataType))
-                    else:
-                        if new_col_name not in processed_columns:
-                            alias_name = new_col_name.replace('.', '_')
-                            select_expressions.append(f"col('{new_col_name}').alias('{alias_name}')")
-                            processed_columns.add(new_col_name)
-
-            elif isinstance(data_type, ArrayType):
-                exploded_col_name = f"{full_col_name}_exploded"
-                df = df.withColumn(exploded_col_name, explode_outer(col(full_col_name)))
-                if isinstance(data_type.elementType, (ArrayType, StructType)):
-                    new_complex_fields.append((exploded_col_name, data_type.elementType))
-                else:
-                    if exploded_col_name not in processed_columns:
-                        select_expressions.append(f"col('{exploded_col_name}').alias('{exploded_col_name}')")
-                        processed_columns.add(exploded_col_name)
-
-        complex_fields = new_complex_fields
-
-    select_clause = ",\n    ".join(select_expressions)
-    select_statement = f"df.select(\n    {select_clause}\n).show(truncate=False)"
-    print(select_statement)  # This prints the select statement
-    
-    return df, select_expressions
+# Example usage
+# Assuming 'spark' is a SparkSession object and 'df' is a DataFrame loaded with complex nested JSON data.
+df_flat = flatten_df(df)
+df_flat.printSchema()
