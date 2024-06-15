@@ -1,10 +1,16 @@
 from pyspark.sql.functions import col, explode_outer
+from pyspark.sql.types import StructType, ArrayType
 
-def generate_explode_and_select(df, path_prefix='', exploded_info=[]):
+def generate_explode_and_select(df, path_prefix='', exploded_info=[], depth=0, max_depth=10):
+    # Safeguard against too deep recursion
+    if depth > max_depth:
+        return []
+
     new_columns = []
     for field in df.schema.fields:
         current_path = f"{path_prefix}.{field.name}" if path_prefix else field.name
         
+        # Check for array to explode
         if isinstance(field.dataType, ArrayType):
             exploded_name = f"{field.name}_exploded"
             if path_prefix:
@@ -12,11 +18,15 @@ def generate_explode_and_select(df, path_prefix='', exploded_info=[]):
                 
             df = df.withColumn(exploded_name, explode_outer(col(current_path)))
             exploded_info.append((current_path, exploded_name))
-            new_columns += generate_explode_and_select(df, exploded_name, exploded_info)
+            # Recurse with increased depth
+            new_columns += generate_explode_and_select(df, exploded_name, exploded_info, depth+1, max_depth)
         
+        # Recurse into structs
         elif isinstance(field.dataType, StructType):
-            new_columns += generate_explode_and_select(df, current_path, exploded_info)
+            new_columns += generate_explode_and_select(df, current_path, exploded_info, depth+1, max_depth)
+        
         else:
+            # Handle simple types by adding them to select expressions
             if path_prefix:
                 select_expr = col(current_path).alias(path_prefix.replace('.', '_') + '_' + field.name)
             else:
