@@ -1,44 +1,19 @@
-def generate_select_for_simple_nested_json(df):
-    select_expressions = []
+# Print the schema to confirm the structure
+df.printSchema()
 
-    def recurse_fields(fields, parent_path=""):
-        for field in fields:
-            current_path = f"{parent_path}.{field.name}" if parent_path else field.name
-            if isinstance(field.dataType, StructType):
-                recurse_fields(field.dataType.fields, current_path)
-            elif not isinstance(field.dataType, ArrayType):
-                alias = current_path.replace('.', '_')
-                select_expressions.append(f"col('{current_path}').alias('{alias}')")
+# If using a notebook or an interactive environment, display a few rows to understand the structure
+df.show(truncate=False)
 
-    recurse_fields(df.schema.fields)
-    return ",\n    ".join(select_expressions)
+# Assuming 'individualCoreIdentity.individualDemographic' is an array of structures and you exploded it:
+df = df.withColumn("individualDemographic_exploded", explode_outer(col("individualCoreIdentity.individualDemographic")))
 
-# Example usage:
-select_clause = generate_select_for_simple_nested_json(df)
-print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
+# After explosion, print schema again to verify new structure
+df.printSchema()
 
-def generate_explode_and_select(df):
-    exploded_info = []
-    select_expressions = []
+# Selecting the 'createdBy' from the exploded array
+try:
+    df.select(col("individualDemographic_exploded.createdBy").alias("created_by")).show(truncate=False)
+except Exception as e:
+    print("Error in selecting column:", e)
 
-    def recurse_explode(fields, parent_path=""):
-        for field in fields:
-            current_path = f"{parent_path}.{field.name}" if parent_path else field.name
-            if isinstance(field.dataType, ArrayType):
-                exploded_name = current_path.replace('.', '_') + "_exploded"
-                df = df.withColumn(exploded_name, explode_outer(col(current_path)))
-                exploded_info.append(exploded_name)
-                if isinstance(field.dataType.elementType, StructType):
-                    recurse_explode(field.dataType.elementType.fields, exploded_name)
-            elif isinstance(field.dataType, StructType):
-                recurse_explode(field.dataType.fields, current_path)
-            else:
-                alias = current_path.replace('.', '_')
-                select_expressions.append(f"col('{current_path}').alias('{alias}')")
-
-    recurse_explode(df.schema.fields)
-    return df, ",\n    ".join(select_expressions)
-
-# Example usage:
-df, select_clause = generate_explode_and_select(df)
-print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
+# If the above step fails, verify column names and adjust accordingly.
