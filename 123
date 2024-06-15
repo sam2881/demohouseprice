@@ -1,5 +1,3 @@
-from pyspark.sql.functions import col, explode_outer
-
 def flatten_json(df, prefix=""):
     """
     Flattens a DataFrame with complex nested fields (Arrays and Structs) by converting them into individual columns
@@ -12,39 +10,36 @@ def flatten_json(df, prefix=""):
     Returns:
     - A tuple of the flattened DataFrame and the select expression list.
     """
-    select_expressions = []  # To store select expressions for final selection
+    select_expressions = []  # To store final select expressions
     complex_fields = [(field.name, field.dataType) for field in df.schema.fields
                       if isinstance(field.dataType, (ArrayType, StructType))]
-    
+
     while complex_fields:
         new_complex_fields = []
         for col_name, data_type in complex_fields:
             full_col_name = f"{prefix}{col_name}" if prefix else col_name
-            
+
             if isinstance(data_type, StructType):
-                # Handle StructType by expanding its subfields
                 for field in data_type.fields:
                     new_col_name = f"{full_col_name}_{field.name}"
                     df = df.withColumn(new_col_name, col(f"{col_name}.{field.name}"))
-                    select_expressions.append(f"col('{new_col_name}').alias('{new_col_name}')")
                     if isinstance(field.dataType, (ArrayType, StructType)):
                         new_complex_fields.append((new_col_name, field.dataType))
+                    else:
+                        select_expressions.append(f"col('{new_col_name}').alias('{new_col_name}')")
+
             elif isinstance(data_type, ArrayType):
-                # Handle ArrayType by exploding the array
                 exploded_col_name = f"{full_col_name}_exploded"
                 df = df.withColumn(exploded_col_name, explode_outer(col(col_name)))
-                select_expressions.append(f"col('{exploded_col_name}').alias('{exploded_col_name}')")
                 if isinstance(data_type.elementType, (ArrayType, StructType)):
                     new_complex_fields.append((exploded_col_name, data_type.elementType))
+                else:
+                    select_expressions.append(f"col('{exploded_col_name}').alias('{exploded_col_name}')")
 
         complex_fields = new_complex_fields
     
-    # Generate the select statement
-    select_statement = f"df.select(\n    {',\n    '.join(select_expressions)}\n).show(truncate=False)"
-    print(select_statement)  # Print or return this statement as needed
+    select_clause = ",\n    ".join(select_expressions)
+    select_statement = f"df.select(\n    {select_clause}\n).show(truncate=False)"
+    print(select_statement)  # This prints the select statement
     
     return df, select_expressions
-
-# Usage Example
-df_flattened, select_expr = flatten_json(df)
-df_flattened.show()
