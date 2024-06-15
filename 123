@@ -1,71 +1,50 @@
 from pyspark.sql.functions import col, explode_outer
-from pyspark.sql import SparkSession
-import re
 
-def camel_to_snake(name):
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
-
-def get_field(schema, part):
-    for field in schema.fields:
-        if field.name == part:
-            return field
-    return None
-
-def apply_nested_explode_and_select(df, paths):
-    exploded_info = []
-    select_expressions = []
-
-    for path in paths:
-        sub_parts = path.split('.')
-        current_path = ""
-        current_schema = df.schema
-        
-        for i, part in enumerate(sub_parts):
-            field = get_field(current_schema, part)
-            if field is None:
-                raise ValueError(f"No field found for part '{part}' in path '{path}'")
+def flatten_json(df, prefix=""):
+    """
+    Flattens a DataFrame with complex nested fields (Arrays and Structs) by converting them into individual columns
+    and allows for dynamic aliasing in the select statement.
+    
+    Parameters:
+    - df: The input DataFrame with complex nested fields
+    - prefix: A string prefix to prepend to column aliases for uniqueness and traceability
+    
+    Returns:
+    - A tuple of the flattened DataFrame and the select expression list.
+    """
+    select_expressions = []  # To store select expressions for final selection
+    complex_fields = [(field.name, field.dataType) for field in df.schema.fields
+                      if isinstance(field.dataType, (ArrayType, StructType))]
+    
+    while complex_fields:
+        new_complex_fields = []
+        for col_name, data_type in complex_fields:
+            full_col_name = f"{prefix}{col_name}" if prefix else col_name
             
-            if isinstance(field.dataType, StructType):
-                current_schema = field.dataType
-                current_path = current_path + "." + part if current_path else part
-            elif isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
-                if current_path:
-                    complete_path = current_path + "." + part
-                else:
-                    complete_path = part
-                exploded_column_name = camel_to_snake(part + '_exploded')
-                if complete_path not in exploded_info:
-                    df = df.withColumn(exploded_column_name, explode_outer(col(complete_path)))
-                    exploded_info.append(complete_path)
-                current_schema = field.dataType.elementType
-                current_path = exploded_column_name
+            if isinstance(data_type, StructType):
+                # Handle StructType by expanding its subfields
+                for field in data_type.fields:
+                    new_col_name = f"{full_col_name}_{field.name}"
+                    df = df.withColumn(new_col_name, col(f"{col_name}.{field.name}"))
+                    select_expressions.append(f"col('{new_col_name}').alias('{new_col_name}')")
+                    if isinstance(field.dataType, (ArrayType, StructType)):
+                        new_complex_fields.append((new_col_name, field.dataType))
+            elif isinstance(data_type, ArrayType):
+                # Handle ArrayType by exploding the array
+                exploded_col_name = f"{full_col_name}_exploded"
+                df = df.withColumn(exploded_col_name, explode_outer(col(col_name)))
+                select_expressions.append(f"col('{exploded_col_name}').alias('{exploded_col_name}')")
+                if isinstance(data_type.elementType, (ArrayType, StructType)):
+                    new_complex_fields.append((exploded_col_name, data_type.elementType))
 
-        # Generating select expressions for all fields in the final exploded column
-        if isinstance(field.dataType, ArrayType) and isinstance(field.dataType.elementType, StructType):
-            for struct_field in field.dataType.elementType.fields:
-                select_expressions.append(
-                    f"col('{current_path}.{struct_field.name}').alias('{camel_to_snake(struct_field.name)}')"
-                )
-
+        complex_fields = new_complex_fields
+    
     # Generate the select statement
-    select_expr_string = ",\n    ".join(select_expressions)
-    select_statement = f"df.select(\n    {select_expr_string}\n).show(truncate=False)"
-    return select_statement
+    select_statement = f"df.select(\n    {',\n    '.join(select_expressions)}\n).show(truncate=False)"
+    print(select_statement)  # Print or return this statement as needed
+    
+    return df, select_expressions
 
-# Example usage:
-spark = SparkSession.builder.appName("Nested Explode and Select Example").getOrCreate()
-
-# Assuming df is your DataFrame and you have paths like below
-paths = [
-    "individualCoreIdentity.individualDemographic",
-    "individualCoreIdentity.productEntitlement.individualPreference",
-    "individualCoreIdentity.productEntitlement.individualPreference.preferenceValue"
-]
-
-# Load your data into df, then apply the function
-# df = spark.read...
-select_statement = apply_nested_explode_and_select(df, paths)
-
-print(select_statement)
-spark.stop()
+# Usage Example
+df_flattened, select_expr = flatten_json(df)
+df_flattened.show()
