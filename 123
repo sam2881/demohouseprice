@@ -1,24 +1,44 @@
-from pyspark.sql.functions import col
-
-def generate_simple_select(df):
+def generate_select_for_simple_nested_json(df):
     select_expressions = []
-    print("Debugging Schema Fields:")  # Debugging statement
-    try:
-        for field in df.schema.fields:
-            print(f"Field Name: {field.name}, Type: {field.dataType}")  # Debugging statement
-            if not isinstance(field.dataType, (ArrayType, StructType)):
-                path = field.name
-                alias = path.replace('.', '_')
-                select_expressions.append(f"col('{path}').alias('{alias}')")
-    except Exception as e:
-        print(f"Error processing schema fields: {e}")
 
-    select_clause = ",\n    ".join(select_expressions)
-    return select_clause
+    def recurse_fields(fields, parent_path=""):
+        for field in fields:
+            current_path = f"{parent_path}.{field.name}" if parent_path else field.name
+            if isinstance(field.dataType, StructType):
+                recurse_fields(field.dataType.fields, current_path)
+            elif not isinstance(field.dataType, ArrayType):
+                alias = current_path.replace('.', '_')
+                select_expressions.append(f"col('{current_path}').alias('{alias}')")
 
-# Example Usage
-select_clause = generate_simple_select(df)
-if select_clause:
-    print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
-else:
-    print("No simple type fields found.")  # Additional output for empty result
+    recurse_fields(df.schema.fields)
+    return ",\n    ".join(select_expressions)
+
+# Example usage:
+select_clause = generate_select_for_simple_nested_json(df)
+print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
+
+def generate_explode_and_select(df):
+    exploded_info = []
+    select_expressions = []
+
+    def recurse_explode(fields, parent_path=""):
+        for field in fields:
+            current_path = f"{parent_path}.{field.name}" if parent_path else field.name
+            if isinstance(field.dataType, ArrayType):
+                exploded_name = current_path.replace('.', '_') + "_exploded"
+                df = df.withColumn(exploded_name, explode_outer(col(current_path)))
+                exploded_info.append(exploded_name)
+                if isinstance(field.dataType.elementType, StructType):
+                    recurse_explode(field.dataType.elementType.fields, exploded_name)
+            elif isinstance(field.dataType, StructType):
+                recurse_explode(field.dataType.fields, current_path)
+            else:
+                alias = current_path.replace('.', '_')
+                select_expressions.append(f"col('{current_path}').alias('{alias}')")
+
+    recurse_explode(df.schema.fields)
+    return df, ",\n    ".join(select_expressions)
+
+# Example usage:
+df, select_clause = generate_explode_and_select(df)
+print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
