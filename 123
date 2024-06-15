@@ -4,12 +4,15 @@ from pyspark.sql.types import StructType, ArrayType
 def generate_explode_and_select(df, path_prefix='', exploded_info=[], depth=0, max_depth=10):
     # Safeguard against too deep recursion
     if depth > max_depth:
+        print(f"Max depth {max_depth} exceeded at path {path_prefix}")
         return []
 
     new_columns = []
     for field in df.schema.fields:
         current_path = f"{path_prefix}.{field.name}" if path_prefix else field.name
         
+        print(f"Processing {current_path} of type {type(field.dataType)}")  # Debug statement
+
         # Check for array to explode
         if isinstance(field.dataType, ArrayType):
             exploded_name = f"{field.name}_exploded"
@@ -18,6 +21,8 @@ def generate_explode_and_select(df, path_prefix='', exploded_info=[], depth=0, m
                 
             df = df.withColumn(exploded_name, explode_outer(col(current_path)))
             exploded_info.append((current_path, exploded_name))
+            print(f"Exploding {current_path} to {exploded_name}")  # Debug statement
+            
             # Recurse with increased depth
             new_columns += generate_explode_and_select(df, exploded_name, exploded_info, depth+1, max_depth)
         
@@ -32,12 +37,16 @@ def generate_explode_and_select(df, path_prefix='', exploded_info=[], depth=0, m
             else:
                 select_expr = col(current_path).alias(field.name)
             new_columns.append(select_expr)
+            print(f"Adding select expression for {current_path}")  # Debug statement
     
     return new_columns
 
 # Use the function
 exploded_info = []
 select_columns = generate_explode_and_select(df, exploded_info=exploded_info)
-df_final = df.select(*select_columns)
-df_final.show(truncate=False)
-print([c for c in select_columns])
+if select_columns:
+    df_final = df.select(*select_columns)
+    df_final.show(truncate=False)
+    print("Select Expressions:", [str(c) for c in select_columns])
+else:
+    print("No columns were added to select expressions. Check your DataFrame's schema.")
