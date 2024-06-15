@@ -1,42 +1,45 @@
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, explode_outer
-from pyspark.sql.types import StructType, ArrayType, StructField
-
-def flatten_df(df, prefix=''):
-    """
-    Recursively flattens a DataFrame and handles arrays by exploding them.
-
-    :param df: Input DataFrame
-    :param prefix: Cumulative path to prepend to column names for maintaining hierarchy
-    :return: DataFrame with flattened schema
-    """
-    # Base case: no more StructType or ArrayType to flatten
-    complex_fields = [f for f in df.schema.fields if isinstance(f.dataType, (StructType, ArrayType))]
-    if not complex_fields:
-        return df
-
-    new_columns = []
+def generate_simple_select(df):
+    select_expressions = []
     for field in df.schema.fields:
-        new_col_name = prefix + field.name if prefix else field.name
+        if not isinstance(field.dataType, (ArrayType, StructType)):
+            path = field.name
+            select_expressions.append(f"col('{path}').alias('{path.replace('.', '_')}')")
+    return ",\n    ".join(select_expressions)
+from pyspark.sql.functions import explode_outer
 
+def generate_complex_select(df, path_prefix=''):
+    select_expressions = []
+    for field in df.schema.fields:
+        full_path = f"{path_prefix}{field.name}" if path_prefix else field.name
+        
         if isinstance(field.dataType, StructType):
-            # Recursively flatten structs
-            flattened_df = flatten_df(df.select(f"{new_col_name}.*"), new_col_name + '_')
-            new_columns.extend([col(f.name).alias(new_col_name + '_' + f.name) for f in flattened_df.schema.fields])
+            # Recursively handle StructType
+            sub_expressions = generate_complex_select(df.select(f"{full_path}.*"), full_path + '_')
+            select_expressions.append(sub_expressions)
         elif isinstance(field.dataType, ArrayType):
-            # Explode arrays and flatten the resulting DataFrame recursively
+            # Handle ArrayType by exploding the array
+            exploded_column = f"{full_path}_exploded"
+            df = df.withColumn(exploded_column, explode_outer(col(full_path)))
             if isinstance(field.dataType.elementType, StructType):
-                df = df.withColumn(new_col_name, explode_outer(col(new_col_name)))
-                flattened_df = flatten_df(df.select(f"{new_col_name}.*"), new_col_name + '_')
-                new_columns.extend([col(f.name).alias(new_col_name + '_' + f.name) for f in flattened_df.schema.fields])
+                # Recursively handle elements if they are StructTypes
+                sub_expressions = generate_complex_select(df.select(f"{exploded_column}.*"), exploded_column + '_')
+                select_expressions.append(sub_expressions)
             else:
-                new_columns.append(explode_outer(col(new_col_name)).alias(new_col_name))
+                select_expressions.append(f"col('{exploded_column}').alias('{exploded_column}')")
         else:
-            new_columns.append(col(new_col_name).alias(new_col_name))
+            select_expressions.append(f"col('{full_path}').alias('{full_path.replace('.', '_')}')")
 
-    return df.select(new_columns)
+    return ",\n    ".join(select_expressions)
 
-# Usage
-flattened_df = flatten_df(df)
-flattened_df.printSchema()
-flattened_df.show(truncate=False)
+# Example usage:
+# Assuming `df` is your DataFrame loaded with complex nested JSON.
+simple_select = generate_simple_select(df)
+complex_select = generate_complex_select(df)
+
+# Print select statements for verification
+print(f"Simple Select:\n{simple_select}\n")
+print(f"Complex Select:\n{complex_select}\n")
+
+
+select_statement = f"df.select(\n    {complex_select}\n).show(truncate=False)"
+print(select_statement)
