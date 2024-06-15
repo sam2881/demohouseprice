@@ -1,36 +1,45 @@
-import re
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, explode_outer
 
 def camel_to_snake(name):
-    """Convert camelCase string to snake_case string."""
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
-def apply_explode_and_select(df, paths_to_explode):
-    """Explode arrays based on provided paths and generate select statement."""
-    exploded_columns = []
-    for path in paths_to_explode:
-        exploded_column_name = camel_to_snake(path.split('.')[-1] + '_exploded')
-        df = df.withColumn(exploded_column_name, explode_outer(col(path)))
-        exploded_columns.append(exploded_column_name)
+def apply_nested_explode_and_select(df, paths):
+    exploded_info = []
+    for path in paths:
+        path_parts = path.split('.')
+        for i in range(len(path_parts)):
+            current_path = '.'.join(path_parts[:i+1])
+            exploded_column_name = camel_to_snake(path_parts[i] + '_exploded')
+            if current_path not in exploded_info:
+                df = df.withColumn(exploded_column_name, explode_outer(col(current_path)))
+                exploded_info.append(current_path)
+    
+    # Generate select expressions
+    select_expressions = []
+    for path in paths:
+        last_part = path.split('.')[-1]
+        exploded_column_name = camel_to_snake(last_part + '_exploded')
+        select_expressions.append(f"col('{exploded_column_name}.value').alias('{camel_to_snake(last_part + '_value')}')")
+        select_expressions.append(f"col('{exploded_column_name}.status').alias('{camel_to_snake(last_part + '_status')}')")
 
-    # Generate select expressions with snake_case aliases
-    select_expressions = [f"col('{col_name}').alias('{camel_to_snake(col_name)}')" for col_name in exploded_columns]
-
-    # Join all the select expressions to simulate a DataFrame select method
-    select_statement = "df.select(\n    " + ",\n    ".join(select_expressions) + "\n)"
+    # Create the select statement
+    select_statement = f"df.select(\n    {',\n    '.join(select_expressions)}\n).show(truncate=False)"
     return select_statement
 
 # Example usage:
-spark = SparkSession.builder.appName("Explode and Select Example").getOrCreate()
+spark = SparkSession.builder.appName("Nested Explode and Select Example").getOrCreate()
 
 # Assuming df is your DataFrame and you have paths like below
-paths = ["metadata.subEvents", "individualCoreIdentity.individualDemographic"]
+paths = [
+    "individualCoreIdentity.productEntitlement.individualPreference",
+    "individualCoreIdentity.productEntitlement.individualPreference.preferenceValue"
+]
 
 # Load your data into df, then apply the function
 # df = spark.read...
-select_statement = apply_explode_and_select(df, paths)
+select_statement = apply_nested_explode_and_select(df, paths)
 
 print(select_statement)
 spark.stop()
