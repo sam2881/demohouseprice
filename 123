@@ -1,19 +1,33 @@
-# Print the schema to confirm the structure
-df.printSchema()
+from pyspark.sql.functions import col, explode_outer
 
-# If using a notebook or an interactive environment, display a few rows to understand the structure
-df.show(truncate=False)
+def generate_explode_and_select(df, path_prefix='', exploded_info=[]):
+    new_columns = []
+    for field in df.schema.fields:
+        current_path = f"{path_prefix}.{field.name}" if path_prefix else field.name
+        
+        if isinstance(field.dataType, ArrayType):
+            exploded_name = f"{field.name}_exploded"
+            if path_prefix:
+                exploded_name = f"{path_prefix.replace('.', '_')}_{exploded_name}"
+                
+            df = df.withColumn(exploded_name, explode_outer(col(current_path)))
+            exploded_info.append((current_path, exploded_name))
+            new_columns += generate_explode_and_select(df, exploded_name, exploded_info)
+        
+        elif isinstance(field.dataType, StructType):
+            new_columns += generate_explode_and_select(df, current_path, exploded_info)
+        else:
+            if path_prefix:
+                select_expr = col(current_path).alias(path_prefix.replace('.', '_') + '_' + field.name)
+            else:
+                select_expr = col(current_path).alias(field.name)
+            new_columns.append(select_expr)
+    
+    return new_columns
 
-# Assuming 'individualCoreIdentity.individualDemographic' is an array of structures and you exploded it:
-df = df.withColumn("individualDemographic_exploded", explode_outer(col("individualCoreIdentity.individualDemographic")))
-
-# After explosion, print schema again to verify new structure
-df.printSchema()
-
-# Selecting the 'createdBy' from the exploded array
-try:
-    df.select(col("individualDemographic_exploded.createdBy").alias("created_by")).show(truncate=False)
-except Exception as e:
-    print("Error in selecting column:", e)
-
-# If the above step fails, verify column names and adjust accordingly.
+# Use the function
+exploded_info = []
+select_columns = generate_explode_and_select(df, exploded_info=exploded_info)
+df_final = df.select(*select_columns)
+df_final.show(truncate=False)
+print([c for c in select_columns])
