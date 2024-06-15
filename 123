@@ -2,21 +2,23 @@ from pyspark.sql.functions import col
 
 def generate_simple_select(df):
     select_expressions = []
+    print("Debugging Schema Fields:")  # Debugging statement
     try:
         for field in df.schema.fields:
+            print(f"Field Name: {field.name}, Type: {field.dataType}")  # Debugging statement
             if not isinstance(field.dataType, (ArrayType, StructType)):
                 path = field.name
-                # Handle the alias creation to ensure it doesn't include invalid characters or conflicts
                 alias = path.replace('.', '_')
                 select_expressions.append(f"col('{path}').alias('{alias}')")
     except Exception as e:
         print(f"Error processing schema fields: {e}")
 
-    # Generate the select clause for use in a select statement
     select_clause = ",\n    ".join(select_expressions)
     return select_clause
 
 # Example Usage
-# Assuming 'df' is your DataFrame
 select_clause = generate_simple_select(df)
-print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
+if select_clause:
+    print(f"df.select(\n    {select_clause}\n).show(truncate=False)")
+else:
+    print("No simple type fields found.")  # Additional output for empty result
