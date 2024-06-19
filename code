@@ -150,21 +150,40 @@ def extract_column_paths(schema, parent_path=""):
                 column_paths.extend(nested_paths)
                 explode_paths.extend(nested_explode)
             elif isinstance(field.dataType, ArrayType):
+                explode_col_name = f"{camel_to_snake(field.name)}_exploded"
+                explode_paths.append((current_path, explode_col_name))
                 if isinstance(field.dataType.elementType, StructType):
-                    explode_col_name = f"{camel_to_snake(field.name)}_exploded"
-                    explode_paths.append((current_path, explode_col_name))
                     nested_paths, nested_explode = extract_column_paths(field.dataType.elementType, f"{explode_col_name}")
                     column_paths.extend(nested_paths)
                     explode_paths.extend(nested_explode)
-                else:
-                    explode_col_name = f"{camel_to_snake(field.name)}_exploded"
-                    explode_paths.append((current_path, explode_col_name))
-                    column_paths.append(explode_col_name)
             else:
                 column_paths.append(current_path)
         return column_paths, explode_paths
     except Exception as e:
         logging.error(f"Error extracting column paths: {e}")
+        raise
+
+def update_column_paths(column_paths, explode_paths):
+    """
+    Update column paths with exploded column names.
+
+    Args:
+        column_paths (List[str]): A list of original column paths.
+        explode_paths (List[Tuple[str, str]]): A list of tuples (original_path, exploded_path).
+
+    Returns:
+        List[str]: Updated column paths after explosions.
+    """
+    try:
+        exploded_col_map = {orig_col: f"exploded_{exp_col_name}" for orig_col, exp_col_name in explode_paths}
+        updated_column_paths = []
+        for path in column_paths:
+            parts = path.split('.')
+            updated_parts = [exploded_col_map.get(part, part) for part in parts]
+            updated_column_paths.append('.'.join(updated_parts))
+        return updated_column_paths
+    except Exception as e:
+        logging.error(f"Error updating column paths: {e}")
         raise
 
 def generate_select_expression_from_list(column_names, explode_paths):
@@ -199,7 +218,6 @@ def generate_select_expression_from_list(column_names, explode_paths):
                 select_expr.append(f"col('{col_name}').alias('{snake_case_name}')")
             else:
                 raise ValueError("Column name is not a string.")
-
         return ",\n".join(select_expr)
     except Exception as e:
         logging.error(f"Error generating select expression: {e}")
@@ -231,7 +249,6 @@ def generate_pyspark_script(config, schema):
         logging.info("Generating explosion code for arrays.")
 
         explosion_code = []
-        updated_column_paths = deepcopy(column_paths)
         exploded_col_map = {}
 
         for orig_col, exp_col_name in explode_paths:
@@ -239,11 +256,7 @@ def generate_pyspark_script(config, schema):
             explosion_code.append(f"df = df.withColumn('{exp_col_name}', explode_outer(col('{orig_col}')))")
             explosion_code.append(f"df = debug_df(df, 'After exploding {exp_col_name}')")  # Debug info if needed
 
-            # Update column paths and exploded column map
-            exploded_col_map[orig_col] = exp_col_name
-            for i, path in enumerate(updated_column_paths):
-                if orig_col in path:
-                    updated_column_paths[i] = path.replace(orig_col, f"exploded_{exp_col_name}")
+        updated_column_paths = update_column_paths(column_paths, explode_paths)
 
         print(f"This is updated_column_paths : {updated_column_paths}")
 
@@ -263,7 +276,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, explode_outer
 from pyspark.sql.types import *
 import logging
-from {schema_module} import get_schema
 
 logging.basicConfig(level=logging.INFO)
 
@@ -274,7 +286,7 @@ def debug_df(df, step_desc):
     return df
 
 spark = SparkSession.builder.appName("JsonToDataFrame").getOrCreate()
-
+from {schema_module} import get_schema
 schema = get_schema()
 df = spark.read.schema(schema).option("multiline", "true").json("{config['json_data_input_path']}")
 
