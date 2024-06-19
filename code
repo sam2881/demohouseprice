@@ -150,12 +150,16 @@ def extract_column_paths(schema, parent_path=""):
                 column_paths.extend(nested_paths)
                 explode_paths.extend(nested_explode)
             elif isinstance(field.dataType, ArrayType):
-                explode_col_name = f"{camel_to_snake(field.name)}_exploded"
-                explode_paths.append((current_path, explode_col_name))
-                if isinstance(field.dataType.elementType, StructType):
-                    nested_paths, nested_explode = extract_column_paths(field.dataType.elementType, f"{explode_col_name}")
-                    column_paths.extend(nested_paths)
-                    explode_paths.extend(nested_explode)
+                if isinstance(field.dataType.elementType, StringType):
+                    # Array of strings, no need to explode or process further
+                    column_paths.append(current_path)
+                else:
+                    explode_col_name = f"{camel_to_snake(field.name)}_exploded"
+                    explode_paths.append((current_path, explode_col_name))
+                    if isinstance(field.dataType.elementType, StructType):
+                        nested_paths, nested_explode = extract_column_paths(field.dataType.elementType, f"{explode_col_name}")
+                        column_paths.extend(nested_paths)
+                        explode_paths.extend(nested_explode)
             else:
                 column_paths.append(current_path)
         return column_paths, explode_paths
