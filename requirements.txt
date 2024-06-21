@@ -1,5 +1,71 @@
-flask
-pandas
-numpy
-scikit-learn==0.23.2
-gunicorn
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "person": {
+      "type": "object",
+      "properties": {
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "street": { "type": "string" },
+              "city": { "type": "string" },
+              "postalCode": { "type": "string" },
+              "contacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string" },
+                    "value": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["person"]
+}
+
+
+{
+  "person": {
+    "firstName": "John",
+    "lastName": "Doe",
+    "addresses": [
+      {
+        "street": "123 Main St",
+        "city": "Springfield",
+        "postalCode": "12345",
+        "contacts": [
+          {
+            "type": "phone",
+            "value": "123-456-7890"
+          },
+          {
+            "type": "email",
+            "value": "john.doe@example.com"
+          }
+        ]
+      },
+      {
+        "street": "456 Elm St",
+        "city": "Shelbyville",
+        "postalCode": "67890",
+        "contacts": [
+          {
+            "type": "phone",
+            "value": "098-765-4321"
+          }
+        ]
+      }
+    ]
+  }
+}
