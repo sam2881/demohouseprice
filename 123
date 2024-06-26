@@ -1,0 +1,48 @@
+def save_to_iceberg(**kwargs):
+    """Save the validation results to an Iceberg table."""
+    try:
+        ti = kwargs['ti']
+        tables_info = ti.xcom_pull(key='trino_table_info', task_ids='query_trino')
+        logging.info(f"Retrieved table info from Xcom: {tables_info}")
+
+        if not tables_info:
+            logging.error("No table info retrieved from XCom.")
+            return
+
+        trino_tables = tables_info.get('trino_tables', [])
+        logging.info(f"Trino tables: {trino_tables}")
+
+        la_timezone = pytz.timezone('America/Los_Angeles')
+        current_timestamp = datetime.now(la_timezone)
+        year_month = current_timestamp.strftime('%Y-%m')
+        load_ts = current_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+
+        hook = TrinoHook(trino_conn_id='trino_cornerstone')
+        insert_statements = []
+
+        for table_info in trino_tables:
+            source = table_info.get('source', 'N/A')
+            table = table_info.get('table')
+            counts = table_info.get('counts', {'NA': 0})
+            logging.info(f"Processing table: {table}, source: {source}, counts: {counts}")
+
+            for application, count in counts.items():
+                status = 'Data Available' if isinstance(count, int) and count > 0 else 'No Data'
+                insert_statement = f"""
+                    SET TIME ZONE 'America/Los_Angeles';
+                    INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
+                    VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}')
+                """
+                insert_statements.append(insert_statement)
+
+        if not insert_statements:
+            logging.error("No insert statements generated.")
+            return
+
+        for statement in insert_statements:
+            logging.info(f"Executing insert statement: {statement}")
+            hook.run(statement)
+        logging.info("Data successfully inserted into the Iceberg table.")
+    except Exception as e:
+        logging.error(f"Failed to insert data into Iceberg table: {str(e)}")
+        raise
