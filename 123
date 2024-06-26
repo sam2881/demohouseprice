@@ -1,3 +1,8 @@
+from airflow.providers.trino.hooks.trino import TrinoHook
+from datetime import datetime
+import pytz
+import logging
+
 def save_to_iceberg(**kwargs):
     """Save the validation results to an Iceberg table."""
     try:
@@ -18,6 +23,16 @@ def save_to_iceberg(**kwargs):
         load_ts = current_timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
         hook = TrinoHook(trino_conn_id='trino_cornerstone')
+
+        # Execute session settings
+        session_statements = [
+            "SET TIME ZONE 'America/Los_Angeles'",
+            "SET SESSION cdls.insert_existing_partitions_behavior = 'OVERWRITE'"
+        ]
+        for session_statement in session_statements:
+            logging.info(f"Executing session statement: {session_statement}")
+            hook.run(session_statement)
+
         insert_statements = []
 
         for table_info in trino_tables:
@@ -34,9 +49,8 @@ def save_to_iceberg(**kwargs):
                     continue
 
                 insert_statement = f"""
-                SET TIME ZONE 'America/Los_Angeles';
-                INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
-                VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}');
+INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
+VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}');
                 """
                 insert_statements.append(insert_statement)
 
