@@ -1,3 +1,8 @@
+from airflow.providers.trino.hooks.trino import TrinoHook
+from datetime import datetime, timedelta
+import pytz
+import logging
+
 def save_to_iceberg(**kwargs):
     """Save the validation results to an Iceberg table."""
     try:
@@ -7,7 +12,7 @@ def save_to_iceberg(**kwargs):
 
         if not tables_info:
             logging.error("No table info retrieved from XCom.")
-            return
+            raise Exception("Failed to retrieve table information")
 
         trino_tables = tables_info.get('trino_tables', [])
         logging.info(f"Trino tables: {trino_tables}")
@@ -27,11 +32,16 @@ def save_to_iceberg(**kwargs):
             logging.info(f"Processing table: {table}, source: {source}, counts: {counts}")
 
             for application, count in counts.items():
-                status = 'Data Available' if isinstance(count, int) and count > 0 else 'No Data'
+                if isinstance(count, int):
+                    status = 'Data Available' if count > 0 else 'No Data'
+                else:
+                    logging.warning(f"Ignoring invalid count value for application: {application}, count: {count}")
+                    continue
+
                 insert_statement = f"""
-                    SET TIME ZONE 'America/Los_Angeles';
-                    INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
-                    VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}')
+                SET TIME ZONE 'America/Los_Angeles';
+                INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
+                VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}');
                 """
                 insert_statements.append(insert_statement)
 
@@ -42,7 +52,9 @@ def save_to_iceberg(**kwargs):
         for statement in insert_statements:
             logging.info(f"Executing insert statement: {statement}")
             hook.run(statement)
+
         logging.info("Data successfully inserted into the Iceberg table.")
+
     except Exception as e:
         logging.error(f"Failed to insert data into Iceberg table: {str(e)}")
         raise
