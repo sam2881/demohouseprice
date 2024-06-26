@@ -18,12 +18,6 @@ def save_to_iceberg(**kwargs):
         load_ts = current_timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
         hook = TrinoHook(trino_conn_id='trino_cornerstone')
-
-        # Set the time zone for the session
-        set_time_zone_statement = "SET TIME ZONE 'America/Los_Angeles'"
-        hook.run(set_time_zone_statement)
-        logging.info("Time zone set to 'America/Los_Angeles'.")
-
         insert_statements = []
 
         for table_info in trino_tables:
@@ -40,8 +34,9 @@ def save_to_iceberg(**kwargs):
                     continue
 
                 insert_statement = f"""
-INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
-VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}');
+                SET TIME ZONE 'America/Los_Angeles';
+                INSERT INTO iceberg_schema.iceberg_table (source, application, status, count, table_name, load_ts, year_month)
+                VALUES ('{source}', '{application}', '{status}', {count}, '{table}', '{load_ts}', '{year_month}');
                 """
                 insert_statements.append(insert_statement)
 
