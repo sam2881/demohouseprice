@@ -1,0 +1,42 @@
+-- Assuming the additional table has already been created as follows:
+-- CREATE TABLE additional_data (
+--     msgtimestamp TIMESTAMP,
+--     sessionid VARCHAR(255),
+--     insertid INT,
+--     logtype VARCHAR(255),
+--     activityduration INT,
+--     varvalue VARCHAR(255),
+--     nomatchcount INT,
+--     modulenodeid VARCHAR(255),
+--     message VARCHAR(255),
+--     serveraddress VARCHAR(255),
+--     varname VARCHAR(255),
+--     reconfig VARCHAR(255),
+--     activityname VARCHAR(255),
+--     nexttimeout TIMESTAMP,
+--     loglevel VARCHAR(255),
+--     vpid INT
+-- );
+
+INSERT INTO additional_data (
+    msgtimestamp, sessionid, insertid, logtype, activityduration, varvalue, nomatchcount,
+    modulenodeid, message, serveraddress, varname, reconfig, activityname, nexttimeout, loglevel, vpid
+)
+SELECT
+    JSON_VALUE(json_column, '$.MSGTIMESTAMP') AS msgtimestamp,
+    JSON_VALUE(json_column, '$.SESSIONID') AS sessionid,
+    JSON_VALUE(json_column, '$.INSERTID') AS insertid,
+    JSON_VALUE(json_column, '$.LOGTYPE') AS logtype,
+    JSON_VALUE(json_column, '$.ACTIVITYDURATION') AS activityduration,
+    JSON_VALUE(json_column, '$.VARVALUE') AS varvalue,
+    JSON_VALUE(json_column, '$.NOMATCHCOUNT') AS nomatchcount,
+    JSON_VALUE(json_column, '$.MODULENODEID') AS modulenodeid,
+    JSON_VALUE(json_column, '$.MESSAGE') AS message,
+    JSON_VALUE(json_column, '$.SERVERADDRESS') AS serveraddress,
+    JSON_VALUE(json_column, '$.VARNAME') AS varname,
+    JSON_VALUE(json_column, '$.RECONFIG') AS reconfig,
+    JSON_VALUE(json_column, '$.ACTIVITYNAME') AS activityname,
+    JSON_VALUE(json_column, '$.NEXTTIMEOUT') AS nexttimeout,
+    JSON_VALUE(json_column, '$.LOGLEVEL') AS loglevel,
+    JSON_VALUE(json_column, '$.VPID') AS vpid
+FROM json_table;
