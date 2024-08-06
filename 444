@@ -1,0 +1,87 @@
+import json
+from pyspark.sql.types import (StructType, StructField, StringType, IntegerType,
+                               FloatType, BooleanType, ArrayType, LongType, DoubleType, MapType)
+
+# Function to determine PySpark data type
+def infer_pyspark_type(value):
+    if isinstance(value, int):
+        if isinstance(value, bool):
+            return BooleanType()
+        else:
+            return LongType() if value > 2147483647 or value < -2147483648 else IntegerType()
+    elif isinstance(value, float):
+        return DoubleType() if value.is_integer() else FloatType()
+    elif isinstance(value, bool):
+        return BooleanType()
+    elif isinstance(value, list):
+        if len(value) > 0:
+            return ArrayType(infer_pyspark_type(value[0]))
+        else:
+            return ArrayType(StringType())  # default to array of strings if empty
+    elif isinstance(value, dict):
+        # Assuming all values in the dictionary have the same structure
+        if value:
+            first_key = next(iter(value))
+            return MapType(StringType(), infer_pyspark_type(value[first_key]))
+        else:
+            return MapType(StringType(), StringType())  # default to MapType with StringType values
+    else:
+        return StringType()  # default type
+
+# Function to generate PySpark schema from JSON data
+def generate_pyspark_schema(json_data):
+    def generate_struct_fields(d):
+        fields = []
+        for k, v in d.items():
+            if isinstance(v, dict):
+                fields.append(StructField(k, StructType(generate_struct_fields(v)), True))
+            elif isinstance(v, list) and v and isinstance(v[0], dict):
+                # Handle list of dicts (array of struct)
+                fields.append(StructField(k, ArrayType(StructType(generate_struct_fields(v[0]))), True))
+            else:
+                fields.append(StructField(k, infer_pyspark_type(v), True))
+        return fields
+    
+    return StructType(generate_struct_fields(json_data))
+
+# Function to generate a simple JSON schema from JSON data
+def generate_simple_json_schema(json_data):
+    def infer_type(value):
+        if isinstance(value, int):
+            return "integer" if not isinstance(value, bool) else "boolean"
+        elif isinstance(value, float):
+            return "number"
+        elif isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, list):
+            if len(value) > 0:
+                return {"type": "array", "items": infer_type(value[0])}
+            else:
+                return {"type": "array", "items": "string"}
+        elif isinstance(value, dict):
+            return {"type": "object", "properties": {k: infer_type(v) for k, v in value.items()}}
+        else:
+            return "string"
+
+    schema = {"type": "object", "properties": {}, "required": list(json_data.keys())}
+    for key, value in json_data.items():
+        schema["properties"][key] = infer_type(value)
+    return schema
+
+# Load JSON message from a file
+with open('json_message_file.json', 'r') as file:
+    json_data = json.load(file)
+
+# Generate a simple JSON schema
+simple_json_schema = generate_simple_json_schema(json_data)
+
+# Generate PySpark schema
+pyspark_schema = generate_pyspark_schema(json_data)
+
+# Print simple JSON schema
+print("Simple JSON Schema:")
+print(json.dumps(simple_json_schema, indent=2))
+
+# Print PySpark schema
+print("\nPySpark Schema:")
+print(pyspark_schema)
