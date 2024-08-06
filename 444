@@ -1,87 +1,90 @@
-import json
-from pyspark.sql.types import (StructType, StructField, StringType, IntegerType,
-                               FloatType, BooleanType, ArrayType, LongType, DoubleType, MapType)
+-- Assuming the destination table has already been created as follows:
+-- CREATE TABLE parsed_data (
+--     insertrecordid INT,
+--     mpp VARCHAR(255),
+--     ucid VARCHAR(255),
+--     rtpvclost INT,
+--     originatingnumber VARCHAR(255),
+--     videobitrate INT,
+--     redirectnumber VARCHAR(255),
+--     id INT,
+--     enddetails VARCHAR(255),
+--     callstartdate DATE,
+--     calltimestamp TIMESTAMP,
+--     destinationnumber VARCHAR(255),
+--     callstarttime INT,
+--     areacode INT,
+--     recordid INT,
+--     rfroundtriptime INT,
+--     sessionid VARCHAR(255),
+--     teleprotocol VARCHAR(255),
+--     mediatype INT,
+--     videoscreensize INT,
+--     videocodec INT,
+--     receipttimestamp TIMESTAMP,
+--     providername VARCHAR(255),
+--     licenseplatequested VARCHAR(255),
+--     zoneid INT,
+--     portid INT,
+--     insertdate DATE,
+--     emlentryid INT,
+--     insertid INT,
+--     rtpvcjitter INT,
+--     providermessage VARCHAR(255),
+--     rtpsendreports INT,
+--     telemediaencryption VARCHAR(255),
+--     applicationname VARCHAR(255),
+--     calltype INT,
+--     rtpsendjitter INT,
+--     created_datetime TIMESTAMP,
+--     callid VARCHAR(255)
+-- );
 
-# Function to determine PySpark data type
-def infer_pyspark_type(value):
-    if isinstance(value, int):
-        if isinstance(value, bool):
-            return BooleanType()
-        else:
-            return LongType() if value > 2147483647 or value < -2147483648 else IntegerType()
-    elif isinstance(value, float):
-        return DoubleType() if value.is_integer() else FloatType()
-    elif isinstance(value, bool):
-        return BooleanType()
-    elif isinstance(value, list):
-        if len(value) > 0:
-            return ArrayType(infer_pyspark_type(value[0]))
-        else:
-            return ArrayType(StringType())  # default to array of strings if empty
-    elif isinstance(value, dict):
-        # Assuming all values in the dictionary have the same structure
-        if value:
-            first_key = next(iter(value))
-            return MapType(StringType(), infer_pyspark_type(value[first_key]))
-        else:
-            return MapType(StringType(), StringType())  # default to MapType with StringType values
-    else:
-        return StringType()  # default type
-
-# Function to generate PySpark schema from JSON data
-def generate_pyspark_schema(json_data):
-    def generate_struct_fields(d):
-        fields = []
-        for k, v in d.items():
-            if isinstance(v, dict):
-                fields.append(StructField(k, StructType(generate_struct_fields(v)), True))
-            elif isinstance(v, list) and v and isinstance(v[0], dict):
-                # Handle list of dicts (array of struct)
-                fields.append(StructField(k, ArrayType(StructType(generate_struct_fields(v[0]))), True))
-            else:
-                fields.append(StructField(k, infer_pyspark_type(v), True))
-        return fields
-    
-    return StructType(generate_struct_fields(json_data))
-
-# Function to generate a simple JSON schema from JSON data
-def generate_simple_json_schema(json_data):
-    def infer_type(value):
-        if isinstance(value, int):
-            return "integer" if not isinstance(value, bool) else "boolean"
-        elif isinstance(value, float):
-            return "number"
-        elif isinstance(value, bool):
-            return "boolean"
-        elif isinstance(value, list):
-            if len(value) > 0:
-                return {"type": "array", "items": infer_type(value[0])}
-            else:
-                return {"type": "array", "items": "string"}
-        elif isinstance(value, dict):
-            return {"type": "object", "properties": {k: infer_type(v) for k, v in value.items()}}
-        else:
-            return "string"
-
-    schema = {"type": "object", "properties": {}, "required": list(json_data.keys())}
-    for key, value in json_data.items():
-        schema["properties"][key] = infer_type(value)
-    return schema
-
-# Load JSON message from a file
-with open('json_message_file.json', 'r') as file:
-    json_data = json.load(file)
-
-# Generate a simple JSON schema
-simple_json_schema = generate_simple_json_schema(json_data)
-
-# Generate PySpark schema
-pyspark_schema = generate_pyspark_schema(json_data)
-
-# Print simple JSON schema
-print("Simple JSON Schema:")
-print(json.dumps(simple_json_schema, indent=2))
-
-# Print PySpark schema
-print("\nPySpark Schema:")
-print(pyspark_schema)
+INSERT INTO parsed_data (
+    insertrecordid, mpp, ucid, rtpvclost, originatingnumber, videobitrate, redirectnumber, id,
+    enddetails, callstartdate, calltimestamp, destinationnumber, callstarttime, areacode, recordid,
+    rfroundtriptime, sessionid, teleprotocol, mediatype, videoscreensize, videocodec, receipttimestamp,
+    providername, licenseplatequested, zoneid, portid, insertdate, emlentryid, insertid, rtpvcjitter,
+    providermessage, rtpsendreports, telemediaencryption, applicationname, calltype, rtpsendjitter,
+    created_datetime, callid
+)
+SELECT
+    JSON_VALUE(json_column, '$.INSERTRECORDID') AS insertrecordid,
+    JSON_VALUE(json_column, '$.MPP') AS mpp,
+    JSON_VALUE(json_column, '$.UCID') AS ucid,
+    JSON_VALUE(json_column, '$.RTPVCLOST') AS rtpvclost,
+    JSON_VALUE(json_column, '$.ORIGINATINGNUMBER') AS originatingnumber,
+    JSON_VALUE(json_column, '$.VIDEOBITRATE') AS videobitrate,
+    JSON_VALUE(json_column, '$.REDIRECTNUMBER') AS redirectnumber,
+    JSON_VALUE(json_column, '$.ID') AS id,
+    JSON_VALUE(json_column, '$.ENDDETAILS') AS enddetails,
+    JSON_VALUE(json_column, '$.CALLSTARTDATE') AS callstartdate,
+    JSON_VALUE(json_column, '$.CALLTIMESTAMP') AS calltimestamp,
+    JSON_VALUE(json_column, '$.DESTINATIONNUMBER') AS destinationnumber,
+    JSON_VALUE(json_column, '$.CALLSTARTTIME') AS callstarttime,
+    JSON_VALUE(json_column, '$.AREACODE') AS areacode,
+    JSON_VALUE(json_column, '$.RECORDID') AS recordid,
+    JSON_VALUE(json_column, '$.RFROUNDTRIPTIME') AS rfroundtriptime,
+    JSON_VALUE(json_column, '$.SESSIONID') AS sessionid,
+    JSON_VALUE(json_column, '$.TELEPROTOCOL') AS teleprotocol,
+    JSON_VALUE(json_column, '$.MEDIATYPE') AS mediatype,
+    JSON_VALUE(json_column, '$.VIDEOSCREENSIZE') AS videoscreensize,
+    JSON_VALUE(json_column, '$.VIDEOCODEC') AS videocodec,
+    JSON_VALUE(json_column, '$.RECEIPTTIMESTAMP') AS receipttimestamp,
+    JSON_VALUE(json_column, '$.PROVIDERNAME') AS providername,
+    JSON_VALUE(json_column, '$.LICENSEPLATEQUESTED') AS licenseplatequested,
+    JSON_VALUE(json_column, '$.ZONEID') AS zoneid,
+    JSON_VALUE(json_column, '$.PORTID') AS portid,
+    JSON_VALUE(json_column, '$.INSERTDATE') AS insertdate,
+    JSON_VALUE(json_column, '$.EMLENTRYID') AS emlentryid,
+    JSON_VALUE(json_column, '$.INSERTID') AS insertid,
+    JSON_VALUE(json_column, '$.RTPVCJITTER') AS rtpvcjitter,
+    JSON_VALUE(json_column, '$.PROVIDERMESSAGE') AS providermessage,
+    JSON_VALUE(json_column, '$.RTPSENDREPORTS') AS rtpsendreports,
+    JSON_VALUE(json_column, '$.TELEMEDIAENCRYPTION') AS telemediaencryption,
+    JSON_VALUE(json_column, '$.APLICATIONNAME') AS applicationname,
+    JSON_VALUE(json_column, '$.CALLTYPE') AS calltype,
+    JSON_VALUE(json_column, '$.RTPSENDJITTER') AS rtpsendjitter,
+    JSON_VALUE(json_column, '$.CREATED_DATETIME') AS created_datetime,
+    JSON_VALUE(json_column, '$.CALLID') AS callid
+FROM json_table;
