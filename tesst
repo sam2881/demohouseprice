@@ -1,0 +1,252 @@
+import os
+import json
+import logging
+import boto3
+from kafka import KafkaProducer
+from kafka.errors import KafkaError, KafkaTimeoutError, ProducerBlockedException
+from cryptography.fernet import Fernet
+import time
+from pyspark.sql import SparkSession
+from datetime import datetime, timedelta
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def fetch_encryption_key():
+    """Fetch the encryption key from a secure source."""
+    secret_name = os.getenv('SECRET_NAME')
+    region_name = os.getenv('AWS_REGION')
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+        secret = get_secret_value_response['SecretString']
+        return json.loads(secret)['ENCRYPTION_KEY']
+    except Exception as e:
+        logger.error("Failed to fetch encryption key: %s", str(e))
+        raise ValueError("Encryption key could not be retrieved securely")
+
+def setup_kafka_producer(config):
+    """Setup and return a Kafka producer with configuration from the config file."""
+    try:
+        producer_config = {
+            'bootstrap_servers': config['kafka']['bootstrap_servers'],
+            'value_serializer': lambda v: json.dumps(v).encode('utf-8'),
+            'batch_size': config['kafka']['batch_size'],
+            'linger_ms': config['kafka']['linger_ms'],
+            'compression_type': config['kafka']['compression_type'],
+            'acks': config['kafka']['acks'],
+            'buffer_memory': config['kafka']['buffer_memory']
+        }
+
+        # Additional properties can be passed from config
+        additional_props = config['kafka'].get('additional_properties', {})
+        producer_config.update(additional_props)
+
+        producer = KafkaProducer(**producer_config)
+        logger.info("Kafka producer successfully created with configuration from config.yaml")
+        return producer
+    except KafkaError as e:
+        logger.error("Failed to create Kafka producer: %s", str(e))
+        raise
+
+def get_minio_files(bucket_name, minio_client):
+    """List files in a MinIO bucket and return them sorted by last modified date."""
+    try:
+        objects = minio_client.list_objects(bucket_name, recursive=True)
+        files = [(obj.object_name, obj.last_modified) for obj in objects]
+        files_sorted = sorted(files, key=lambda x: x[1])
+
+        logger.info("Files retrieved and sorted by last modified date.")
+        return files_sorted
+    except Exception as e:
+        logger.error(f"Failed to retrieve files from MinIO: {str(e)}")
+        return []
+
+def read_file_from_minio(bucket_name, file_key, minio_client):
+    """Read a file's content from a MinIO bucket."""
+    try:
+        data = minio_client.get_object(bucket_name, file_key)
+        file_content = data.read()
+        logger.info(f"Successfully read file: {file_key}")
+        return file_content
+    except Exception as e:
+        logger.error(f"Failed to read file from MinIO: {str(e)}")
+        return None
+
+def encrypt_message(cipher_suite, message: bytes) -> bytes:
+    """Encrypt the message using Fernet encryption."""
+    try:
+        encrypted_message = cipher_suite.encrypt(message)
+        logger.debug("Message successfully encrypted")
+        return encrypted_message
+    except Exception as e:
+        logger.error("Error encrypting message: %s", str(e))
+        raise
+
+def send_encrypted_message(producer, topic: str, key: str, message: bytes):
+    """Encrypt and send a message to a Kafka topic with retry logic, ensuring the same key goes to the same partition."""
+    max_retries = 3
+    retry_delay = 1
+    for attempt in range(max_retries):
+        try:
+            # Use the customer_id as the key to ensure that all records with the same key are sent to the same partition
+            producer.send(topic, key=key.encode('utf-8'), value=message)
+            producer.flush()
+            logger.info(f"Encrypted message sent to Kafka topic: {topic} with key: {key}")
+            return True
+        except (KafkaTimeoutError, ProducerBlockedException) as e:
+            logger.warning(f"Kafka error: {e}. Retrying in {retry_delay} seconds (attempt {attempt + 1})")
+            time.sleep(retry_delay)
+            retry_delay *= 2  # Exponential backoff
+        except KafkaError as e:
+            logger.error(f"Failed to send message to Kafka: {str(e)}")
+            return False
+    return False
+
+def process_files_serially(files, bucket_name, topic, encryption_key, minio_client):
+    """Process files sequentially, ensuring messages are sent in order for each customer."""
+    cipher_suite = Fernet(encryption_key)
+    producer = setup_kafka_producer(config)
+
+    for file_key, _ in files:
+        try:
+            # Read the file content from MinIO
+            file_content = read_file_from_minio(bucket_name, file_key, minio_client)
+
+            if file_content:
+                # Assume the content includes customer_id and timestamp
+                data = json.loads(file_content.decode('utf-8'))
+                customer_id = data['customer_id']
+
+                # Sort records by timestamp if necessary
+                sorted_records = sorted(data['records'], key=lambda x: x['timestamp'])
+
+                for record in sorted_records:
+                    record_content = json.dumps(record).encode('utf-8')
+                    encrypted_message = encrypt_message(cipher_suite, record_content)
+
+                    # Send to Kafka with customer_id as the key
+                    if send_encrypted_message(producer, topic, customer_id, encrypted_message):
+                        logger.info(f"Record for customer {customer_id} processed and message sent successfully: {file_key}")
+                    else:
+                        logger.error(f"Failed to send message for customer {customer_id} for file: {file_key}")
+
+        except Exception as e:
+            logger.error(f"Error processing file {file_key}: {str(e)}")
+
+def process_data_from_hive_iceberg(spark, table_name, topic, encryption_key, date_column="reporting_date", date_value=None):
+    """Process data from a Hive table in Iceberg format and send it to Kafka."""
+    if date_value is None:
+        date_value = (datetime.now() - timedelta(1)).strftime('%Y-%m-%d')  # Default to yesterday
+
+    query = f"SELECT * FROM {table_name} WHERE {date_column} = '{date_value}'"
+    df = spark.sql(query)
+
+    # Convert DataFrame to JSON and send to Kafka
+    producer = setup_kafka_producer(config)
+    df_json = df.toJSON().collect()  # Collect DataFrame as JSON
+
+    cipher_suite = Fernet(encryption_key)
+    for record in df_json:
+        encrypted_message = encrypt_message(cipher_suite, record.encode('utf-8'))
+        send_encrypted_message(producer, topic, date_value, encrypted_message)
+
+    logger.info(f"Data from table {table_name} for date {date_value} processed and sent to Kafka.")
+minio:
+  endpoint: 'minio.your-domain.com'
+  access_key: 'your-access-key'
+  secret_key: 'your-secret-key'
+  bucket_name: 'your-bucket-name'
+
+kafka:
+  bootstrap_servers: 'your-msk-bootstrap-servers:9092'
+  topic: 'encrypted_topic'
+  batch_size: 16384
+  linger_ms: 10
+  compression_type: 'gzip'
+  acks: 1
+  buffer_memory: 33554432
+  additional_properties: 
+    security_protocol: 'SSL'
+    ssl_cafile: '/path/to/ca-cert.pem'
+    ssl_certfile: '/path/to/service.cert'
+    ssl_keyfile: '/path/to/service.key'
+
+encryption:
+  secret_name: 'your-encryption-key-secret-name'
+  aws_region: 'your-aws-region'
+
+hive:
+  table_name: 'your_hive_table'
+import os
+import yaml
+from minio import Minio
+from pyspark.sql import SparkSession
+from utils import process_files_serially, process_data_from_hive_iceberg, fetch_encryption_key, setup_kafka_producer, get_minio_files
+
+# Load configuration from YAML file
+with open('config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
+
+# Set environment variables for Kafka and encryption
+os.environ['KAFKA_BOOTSTRAP_SERVERS'] = config['kafka']['bootstrap_servers']
+os.environ['SECRET_NAME'] = config['encryption']['secret_name']
+os.environ['AWS_REGION'] = config['encryption']['aws_region']
+
+def main():
+    spark = None
+    producer = None
+    try:
+        # Initialize Spark session
+        spark = SparkSession.builder \
+            .appName("MinioToKafkaIceberg") \
+            .enableHiveSupport() \
+            .getOrCreate()
+
+        # Initialize MinIO client
+        minio_client = Minio(
+            config['minio']['endpoint'],
+            access_key=config['minio']['access_key'],
+            secret_key=config['minio']['secret_key'],
+            secure=True  # Use HTTPS for communication with MinIO
+        )
+
+        # Fetch encryption key securely
+        encryption_key = fetch_encryption_key()
+
+        # Setup Kafka producer
+        producer = setup_kafka_producer(config)
+
+        # Extract configuration settings
+        bucket_name = config['minio']['bucket_name']
+        topic = config['kafka']['topic']
+        hive_table_name = config['hive']['table_name']
+
+        # Process files from MinIO and send to Kafka
+        files = get_minio_files(bucket_name, minio_client)
+        if files:
+            process_files_serially(files, bucket_name, topic, encryption_key, minio_client)
+
+        # Process data from Hive Iceberg table for the previous day
+        if hive_table_name:
+            process_data_from_hive_iceberg(spark, hive_table_name, topic, encryption_key)
+
+    except Exception as e:
+        logger.error("An error occurred: %s", str(e))
+    finally:
+        # Ensure resources are cleaned up properly
+        if spark:
+            spark.stop()
+        if producer:
+            producer.close()
+
+if __name__ == "__main__":
+    main()
