@@ -133,3 +133,69 @@ input_filepath = "input.json"  # Path to your input JSON file
 output_filepath = "generated_rules.json"  # Path to the output rules JSON file
 
 process_json_file(input_filepath, output_filepath)
+
+
+import pytest
+from src.your_module import parse_and_generate_rules, generate_rule, process_json_file
+import json
+import os
+
+def test_generate_rule():
+    # Test integer value
+    rule = generate_rule("age", 25, rule_id=1)
+    assert rule["sql_rule"] == "CASE WHEN rlike(age, '^\\d+$') OR age IS NULL THEN 0 ELSE 1 END"
+    assert rule["display_rule"] == "Auto-generated validation rule"
+
+    # Test date value
+    rule = generate_rule("birth_date", "1990-01-01", rule_id=2)
+    assert rule["sql_rule"] == "CASE WHEN rlike(birth_date, '^(19|20)\\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$') OR birth_date IS NULL THEN 0 ELSE 1 END"
+    assert rule["display_rule"] == "Must be in valid YYYY-MM-DD format."
+
+    # Test email value
+    rule = generate_rule("email", "user@example.com", rule_id=3)
+    assert rule["sql_rule"] == "CASE WHEN rlike(email, '^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$') THEN 0 ELSE 1 END"
+    assert rule["display_rule"] == "Must be a valid email format."
+
+def test_parse_and_generate_rules():
+    # Test parsing of nested JSON data
+    data = {
+        "user": {
+            "id": "abc123",
+            "email": "user@example.com",
+            "profile": {
+                "birth_date": "1990-01-01"
+            }
+        }
+    }
+    rules = []
+    parse_and_generate_rules(data, rules)
+    assert len(rules) == 3
+    assert any(rule["sql_rule"] for rule in rules if "id" in rule["sql_rule"])
+    assert any(rule["sql_rule"] for rule in rules if "email" in rule["sql_rule"])
+    assert any(rule["sql_rule"] for rule in rules if "birth_date" in rule["sql_rule"])
+
+def test_process_json_file(tmp_path):
+    # Test processing JSON file and generating rules
+    input_data = {
+        "user": {
+            "id": "abc123",
+            "email": "user@example.com"
+        }
+    }
+    input_filepath = tmp_path / "input.json"
+    output_filepath = tmp_path / "generated_rules.json"
+
+    # Write input data to file
+    with open(input_filepath, "w") as f:
+        json.dump(input_data, f)
+
+    # Run the process_json_file function
+    process_json_file(str(input_filepath), str(output_filepath))
+
+    # Check if the output file is created and valid
+    assert output_filepath.exists()
+    with open(output_filepath, "r") as f:
+        output_data = json.load(f)
+    assert "expectations" in output_data
+    assert len(output_data["expectations"]) > 0
+
