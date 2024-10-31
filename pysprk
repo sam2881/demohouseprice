@@ -1,0 +1,122 @@
+import json
+import re
+
+# Function to dynamically parse nested JSON data or schema and generate rules
+def parse_and_generate_rules(data, rules, prefix=""):
+    for key, value in data.items():
+        # Use only the current key (field name) for rule generation
+        field_name = key  # This will be the last part of the field name (no prefixes)
+
+        # Recursively handle dictionaries and arrays
+        if isinstance(value, dict):
+            # Nested dictionary, recursively parse
+            parse_and_generate_rules(value, rules, field_name)
+        elif isinstance(value, list):
+            # Array handling, apply rules to each item type
+            if value and isinstance(value[0], dict):
+                # Array of dictionaries (e.g., nested records)
+                parse_and_generate_rules(value[0], rules, field_name)
+            else:
+                # Array of simple types (e.g., list of integers or strings)
+                rule_id = len(rules) + 1
+                rule = generate_rule(field_name, value[0] if value else None, rule_id, is_array=True)
+                rules.append(rule)
+        else:
+            # Generate rule based on the detected pattern or data type of the value
+            rule_id = len(rules) + 1
+            rule = generate_rule(field_name, value, rule_id)
+            rules.append(rule)
+
+# Function to create a rule based on detected type or pattern in the value or inferred type
+def generate_rule(column_name, value, rule_id, is_array=False):
+    rule = {
+        "rule_id": str(rule_id),
+        "display_rule": "Auto-generated validation rule"
+    }
+
+    # Adjust rules based on the type or pattern of the value
+    if isinstance(value, int):
+        # Integer values
+        rule["sql_rule"] = (
+            f"CASE WHEN rlike({column_name}, '^\\d+$') OR {column_name} IS NULL THEN 0 ELSE 1 END"
+            if not is_array else f"CASE WHEN array_all({column_name}, '^\\d+$') OR {column_name} IS NULL THEN 0 ELSE 1 END"
+        )
+        rule["display_rule"] = "Must be a whole number, NULL allowed."
+
+    elif isinstance(value, float):
+        # Decimal values
+        rule["sql_rule"] = (
+            f"CASE WHEN rlike({column_name}, '^\\d+(\\.\\d+)?$') OR {column_name} IS NULL THEN 0 ELSE 1 END"
+            if not is_array else f"CASE WHEN array_all({column_name}, '^\\d+(\\.\\d+)?$') OR {column_name} IS NULL THEN 0 ELSE 1 END"
+        )
+        rule["display_rule"] = "Must be a decimal number, NULL allowed."
+
+    elif isinstance(value, str):
+        # Pattern matching for strings based on value content
+        if re.match(r'^(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$', value):
+            # Date in YYYY-MM-DD format
+            rule["sql_rule"] = (
+                f"CASE WHEN rlike({column_name}, '^(19|20)\\d{{2}}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$') "
+                f"OR {column_name} IS NULL THEN 0 ELSE 1 END"
+            )
+            rule["display_rule"] = "Must be in valid YYYY-MM-DD format, NULL allowed."
+
+        elif re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', value):
+            # Email pattern
+            rule["sql_rule"] = f"CASE WHEN rlike({column_name}, '^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$') THEN 0 ELSE 1 END"
+            rule["display_rule"] = "Must be a valid email format (e.g., example@domain.com)."
+
+        elif re.match(r'^[A-Za-z0-9 ,.-]+$', value):
+            # Alphanumeric with punctuation (general text)
+            rule["sql_rule"] = (
+                f"CASE WHEN rlike({column_name}, '^[A-Za-z0-9 ,.-]+$') OR {column_name} IS NULL THEN 0 ELSE 1 END"
+            )
+            rule["display_rule"] = "Must be alphanumeric with spaces and punctuation allowed, NULL allowed."
+
+        elif re.match(r'^[A-Za-z0-9_-]+$', value):
+            # Alphanumeric with dashes or underscores
+            rule["sql_rule"] = f"CASE WHEN rlike({column_name}, '^[A-Za-z0-9_-]+$') THEN 0 ELSE 1 END"
+            rule["display_rule"] = "Must be alphanumeric with dashes or underscores allowed, non-null."
+
+        else:
+            # Default non-null rule for strings
+            rule["sql_rule"] = f"CASE WHEN {column_name} IS NOT NULL THEN 0 ELSE 1 END"
+            rule["display_rule"] = "Must be non-null."
+
+    else:
+        # Fallback rule for any field that doesn’t match a specific type
+        rule["sql_rule"] = f"CASE WHEN {column_name} IS NOT NULL THEN 0 ELSE 1 END"
+        rule["display_rule"] = "Must be non-null."
+
+    return rule
+
+# Main function to load input, process rules, and save output
+def process_json_file(input_filepath, output_filepath):
+    # Load JSON input from file (it could be a JSON data message or JSON schema)
+    with open(input_filepath, "r") as file:
+        input_data = json.load(file)
+
+    # Initialize an empty list to store the generated rules
+    rules = []
+    
+    # Recursively parse the JSON structure and generate rules
+    parse_and_generate_rules(input_data, rules)
+
+    # Structure the output as required
+    expectation_suite = {
+        "expectation_suite_name": "dynamic_expectation_suite",
+        "expectations": rules
+    }
+
+    # Save the generated rules to the output JSON file
+    with open(output_filepath, "w") as file:
+        json.dump(expectation_suite, file, indent=4)
+    
+    print(f"Rules generated and saved to '{output_filepath}'")
+
+# File paths for input JSON and output JSON
+input_filepath = "input.json"  # Path to the JSON data message or JSON schema file
+output_filepath = "generated_rules.json"  # Path to the output rules JSON file
+
+# Run the processing function
+process_json_file(input_filepath, output_filepath)
